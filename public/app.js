@@ -41,6 +41,12 @@ const els = {
   promptCount: $('promptCount'),
   textPrompt: $('textPrompt'),
   imagePromptSuffix: $('imagePromptSuffix'),
+  imageModal: $('imageModal'),
+  modalTitle: $('modalTitle'),
+  modalImage: $('modalImage'),
+  modalDownload: $('modalDownload'),
+  modalDeleteButton: $('modalDeleteButton'),
+  modalCloseButton: $('modalCloseButton'),
   toast: $('toast')
 };
 
@@ -140,7 +146,7 @@ function renderProjectDetail() {
     </article>
   `).join('');
   els.generatedImages.innerHTML = skeletons + detail.images.map((image) => `
-    <article class="image-card">
+    <article class="image-card" data-open-image="${image.id}">
       <img src="${image.url}" alt="${escapeHtml(image.title)}">
       <div class="card-body">
         <strong>${escapeHtml(image.title)}</strong>
@@ -155,6 +161,24 @@ function renderProjectDetail() {
       </div>
     </article>
   `).join('');
+}
+
+function openImageModal(id) {
+  const image = state.projectDetail?.images.find((item) => String(item.id) === String(id));
+  if (!image) return;
+  els.modalTitle.textContent = image.title;
+  els.modalImage.src = image.url;
+  els.modalImage.alt = image.title;
+  els.modalDownload.href = image.downloadUrl;
+  els.modalDeleteButton.dataset.deleteImage = image.id;
+  els.imageModal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeImageModal() {
+  els.imageModal.hidden = true;
+  els.modalImage.src = '';
+  document.body.classList.remove('modal-open');
 }
 
 async function deleteProject(id) {
@@ -173,6 +197,7 @@ async function deleteProject(id) {
 async function deleteGeneratedImage(id) {
   if (!confirm('Borrar esta imagen generada?')) return;
   await api(`/api/images/${id}`, { method: 'DELETE' });
+  closeImageModal();
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
   showToast('Imagen borrada.');
@@ -400,8 +425,25 @@ els.projectsList.addEventListener('click', (event) => {
 
 els.generatedImages.addEventListener('click', (event) => {
   const deleteButton = event.target.closest('[data-delete-image]');
-  if (!deleteButton) return;
-  deleteGeneratedImage(deleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
+  if (deleteButton) {
+    event.stopPropagation();
+    deleteGeneratedImage(deleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
+    return;
+  }
+  if (event.target.closest('a')) return;
+  const card = event.target.closest('[data-open-image]');
+  if (card) openImageModal(card.dataset.openImage);
+});
+
+els.modalCloseButton.addEventListener('click', closeImageModal);
+els.imageModal.addEventListener('click', (event) => {
+  if (event.target.closest('[data-close-modal]')) closeImageModal();
+});
+els.modalDeleteButton.addEventListener('click', () => {
+  deleteGeneratedImage(els.modalDeleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
+});
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !els.imageModal.hidden) closeImageModal();
 });
 
 els.backButton.addEventListener('click', () => {

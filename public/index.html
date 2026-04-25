@@ -125,6 +125,29 @@
       </main>
     </div>
 
+    <div id="imageModal" class="image-modal" hidden>
+      <div class="modal-backdrop" data-close-modal></div>
+      <section class="modal-panel" aria-modal="true" role="dialog">
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Imagen IA</p>
+            <h2 id="modalTitle">Imagen generada</h2>
+          </div>
+          <button class="icon-button" id="modalCloseButton" type="button" title="Cerrar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </header>
+        <img id="modalImage" alt="">
+        <div class="modal-actions">
+          <a class="download-button" id="modalDownload" href="#">Descargar</a>
+          <button class="danger-button compact" id="modalDeleteButton" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+            Borrar
+          </button>
+        </div>
+      </section>
+    </div>
+
     <div id="toast" class="toast" hidden></div>
     <script src="/app.js" type="module"></script>
   </body>
