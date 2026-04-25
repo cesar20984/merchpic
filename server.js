@@ -2,22 +2,16 @@ import 'dotenv/config';
 import express from 'express';
 import multer from 'multer';
 import OpenAI from 'openai';
-import fs from 'fs';
-import path from 'path';
+import { neon } from '@neondatabase/serverless';
 import { fileURLToPath } from 'url';
+import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-const GENERATED_DIR = path.join(__dirname, 'generated');
-const DB_PATH = path.join(DATA_DIR, 'app.json');
-
-for (const dir of [DATA_DIR, UPLOAD_DIR, GENERATED_DIR]) {
-  fs.mkdirSync(dir, { recursive: true });
-}
+const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
 
 const defaultSettings = {
   textModel: 'gpt-4.1-mini',
@@ -32,102 +26,162 @@ Los prompts deben mantener el mismo producto y variar: varios angulos, interior 
   imagePromptSuffix: `Fotografia comercial realista de producto, alta nitidez, iluminacion profesional, materiales fieles, sin texto inventado, sin logos falsos, sin deformar el producto.`
 };
 
-function emptyDb() {
-  return {
-    counters: { projects: 1, sourcePhotos: 1, generatedImages: 1 },
-    settings: { ...defaultSettings },
-    projects: [],
-    sourcePhotos: [],
-    generatedImages: []
-  };
-}
-
-function readDb() {
-  if (!fs.existsSync(DB_PATH)) return emptyDb();
-  const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
-  return {
-    ...emptyDb(),
-    ...data,
-    counters: { ...emptyDb().counters, ...(data.counters || {}) },
-    settings: { ...defaultSettings, ...(data.settings || {}) }
-  };
-}
-
-function writeDb(data) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-}
-
-function now() {
-  return new Date().toISOString();
-}
-
-function nextId(db, key) {
-  const id = db.counters[key] || 1;
-  db.counters[key] = id + 1;
-  return id;
-}
-
-function publicUrl(kind, filename) {
-  return `/${kind}/${encodeURIComponent(filename)}`;
-}
-
-function projectDto(project) {
-  return {
-    ...project,
-    thumbnailUrl: project.thumbnail_path ? publicUrl('uploads', project.thumbnail_path) : null
-  };
-}
-
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-key' });
 const app = express();
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-    filename: (_req, file, cb) => {
-      const safe = file.originalname.replace(/[^\w.-]+/g, '-');
-      cb(null, `${Date.now()}-${Math.random().toString(16).slice(2)}-${safe}`);
-    }
-  }),
-  limits: { fileSize: 15 * 1024 * 1024, files: 20 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 12 },
   fileFilter: (_req, file, cb) => {
     cb(null, /^image\/(png|jpe?g|webp)$/i.test(file.mimetype));
   }
 });
 
-if (!fs.existsSync(DB_PATH)) writeDb(emptyDb());
-
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOAD_DIR));
-app.use('/generated', express.static(GENERATED_DIR, {
-  setHeaders(res) {
-    res.setHeader('Content-Disposition', 'inline');
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+let initPromise;
+
+function ensureDatabase() {
+  if (!sql) {
+    if (isProduction) throw new Error('Falta DATABASE_URL para conectar Neon.');
+    throw new Error('Falta DATABASE_URL. Crea una base Neon y agrega DATABASE_URL en .env.');
   }
-}));
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, openaiConfigured: Boolean(process.env.OPENAI_API_KEY) });
+  initPromise ||= (async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS projects (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        thumbnail_photo_id BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS source_photos (
+        id BIGSERIAL PRIMARY KEY,
+        project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        original_name TEXT,
+        mime_type TEXT NOT NULL,
+        image_data BYTEA NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS generated_images (
+        id BIGSERIAL PRIMARY KEY,
+        project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        size TEXT NOT NULL,
+        model TEXT NOT NULL,
+        mime_type TEXT NOT NULL DEFAULT 'image/png',
+        image_data BYTEA NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `;
+
+    for (const [key, value] of Object.entries(defaultSettings)) {
+      await sql`
+        INSERT INTO settings (key, value)
+        VALUES (${key}, ${value})
+        ON CONFLICT (key) DO NOTHING
+      `;
+    }
+  })();
+
+  return initPromise;
+}
+
+function asNumber(value) {
+  return Number(value);
+}
+
+function projectDto(project) {
+  const id = asNumber(project.id);
+  const thumbnailId = project.thumbnail_photo_id ? asNumber(project.thumbnail_photo_id) : null;
+  return {
+    id,
+    name: project.name,
+    created_at: project.created_at,
+    updated_at: project.updated_at,
+    thumbnail_photo_id: thumbnailId,
+    thumbnailUrl: thumbnailId ? `/api/photos/${thumbnailId}` : null
+  };
+}
+
+async function settingsObject() {
+  await ensureDatabase();
+  const rows = await sql`SELECT key, value FROM settings ORDER BY key`;
+  return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+}
+
+function photoDto(photo) {
+  return {
+    id: asNumber(photo.id),
+    project_id: asNumber(photo.project_id),
+    original_name: photo.original_name,
+    mime_type: photo.mime_type,
+    created_at: photo.created_at,
+    url: `/api/photos/${photo.id}`
+  };
+}
+
+function imageDto(image) {
+  return {
+    id: asNumber(image.id),
+    project_id: asNumber(image.project_id),
+    title: image.title,
+    prompt: image.prompt,
+    size: image.size,
+    model: image.model,
+    mime_type: image.mime_type,
+    created_at: image.created_at,
+    url: `/api/images/${image.id}`,
+    downloadUrl: `/api/images/${image.id}/download`
+  };
+}
+
+app.get('/api/health', async (_req, res) => {
+  try {
+    if (sql) await ensureDatabase();
+    res.json({
+      ok: true,
+      openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+      databaseConfigured: Boolean(sql)
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
-app.get('/api/settings', (_req, res) => {
-  res.json(readDb().settings);
+app.get('/api/settings', async (_req, res) => {
+  res.json(await settingsObject());
 });
 
-app.put('/api/settings', (req, res) => {
-  const db = readDb();
+app.put('/api/settings', async (req, res) => {
+  await ensureDatabase();
   for (const key of Object.keys(defaultSettings)) {
     if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) {
-      db.settings[key] = String(req.body[key] ?? '');
+      await sql`
+        INSERT INTO settings (key, value)
+        VALUES (${key}, ${String(req.body[key] ?? '')})
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value
+      `;
     }
   }
-  writeDb(db);
-  res.json(db.settings);
+  res.json(await settingsObject());
 });
 
 app.get('/api/models', async (_req, res) => {
   if (!process.env.OPENAI_API_KEY) {
-    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en .env' });
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
   }
   const list = await client.models.list();
   const ids = list.data.map((model) => model.id).sort();
@@ -136,84 +190,139 @@ app.get('/api/models', async (_req, res) => {
   res.json({ textModels, imageModels, allModels: ids });
 });
 
-app.get('/api/projects', (_req, res) => {
-  const db = readDb();
-  const projects = [...db.projects].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+app.get('/api/projects', async (_req, res) => {
+  await ensureDatabase();
+  const projects = await sql`SELECT * FROM projects ORDER BY updated_at DESC`;
   res.json(projects.map(projectDto));
 });
 
-app.post('/api/projects', (req, res) => {
+app.post('/api/projects', async (req, res) => {
+  await ensureDatabase();
   const name = String(req.body?.name || '').trim();
   if (!name) return res.status(400).json({ error: 'El nombre del proyecto es obligatorio.' });
-  const db = readDb();
-  const project = {
-    id: nextId(db, 'projects'),
-    name,
-    thumbnail_path: null,
-    created_at: now(),
-    updated_at: now()
-  };
-  db.projects.push(project);
-  writeDb(db);
+  const [project] = await sql`
+    INSERT INTO projects (name)
+    VALUES (${name})
+    RETURNING *
+  `;
   res.status(201).json(projectDto(project));
 });
 
-app.get('/api/projects/:id', (req, res) => {
-  const db = readDb();
-  const project = db.projects.find((item) => item.id === Number(req.params.id));
+app.get('/api/projects/:id', async (req, res) => {
+  await ensureDatabase();
+  const [project] = await sql`SELECT * FROM projects WHERE id = ${req.params.id}`;
   if (!project) return res.status(404).json({ error: 'Proyecto no encontrado.' });
-  const photos = db.sourcePhotos
-    .filter((photo) => photo.project_id === project.id)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map((photo) => ({ ...photo, url: publicUrl('uploads', photo.filename) }));
-  const images = db.generatedImages
-    .filter((image) => image.project_id === project.id)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map((image) => ({ ...image, url: publicUrl('generated', image.filename), downloadUrl: `/api/images/${image.id}/download` }));
-  res.json({ project: projectDto(project), photos, images });
+
+  const photos = await sql`
+    SELECT id, project_id, original_name, mime_type, created_at
+    FROM source_photos
+    WHERE project_id = ${req.params.id}
+    ORDER BY created_at DESC
+  `;
+  const images = await sql`
+    SELECT id, project_id, title, prompt, size, model, mime_type, created_at
+    FROM generated_images
+    WHERE project_id = ${req.params.id}
+    ORDER BY created_at DESC
+  `;
+
+  res.json({
+    project: projectDto(project),
+    photos: photos.map(photoDto),
+    images: images.map(imageDto)
+  });
 });
 
-app.post('/api/projects/:id/photos', upload.array('photos', 20), (req, res) => {
-  const db = readDb();
-  const project = db.projects.find((item) => item.id === Number(req.params.id));
+app.post('/api/projects/:id/photos', upload.array('photos', 12), async (req, res) => {
+  await ensureDatabase();
+  const [project] = await sql`SELECT * FROM projects WHERE id = ${req.params.id}`;
   if (!project) return res.status(404).json({ error: 'Proyecto no encontrado.' });
+
   const files = req.files || [];
+  let firstPhotoId = null;
+
   for (const file of files) {
-    db.sourcePhotos.push({
-      id: nextId(db, 'sourcePhotos'),
-      project_id: project.id,
-      filename: file.filename,
-      original_name: file.originalname,
-      mime_type: file.mimetype,
-      created_at: now()
-    });
+    const hex = file.buffer.toString('hex');
+    const [photo] = await sql`
+      INSERT INTO source_photos (project_id, original_name, mime_type, image_data)
+      VALUES (${req.params.id}, ${file.originalname}, ${file.mimetype}, decode(${hex}, 'hex'))
+      RETURNING id
+    `;
+    firstPhotoId ||= photo.id;
   }
-  if (!project.thumbnail_path && files[0]) project.thumbnail_path = files[0].filename;
-  project.updated_at = now();
-  writeDb(db);
+
+  if (!project.thumbnail_photo_id && firstPhotoId) {
+    await sql`
+      UPDATE projects
+      SET thumbnail_photo_id = ${firstPhotoId}, updated_at = now()
+      WHERE id = ${req.params.id}
+    `;
+  } else {
+    await sql`UPDATE projects SET updated_at = now() WHERE id = ${req.params.id}`;
+  }
+
   res.status(201).json({ uploaded: files.length });
 });
 
-app.get('/api/images/:id/download', (req, res) => {
-  const db = readDb();
-  const image = db.generatedImages.find((item) => item.id === Number(req.params.id));
+app.get('/api/photos/:id', async (req, res) => {
+  await ensureDatabase();
+  const [photo] = await sql`
+    SELECT original_name, mime_type, encode(image_data, 'base64') AS image_base64
+    FROM source_photos
+    WHERE id = ${req.params.id}
+  `;
+  if (!photo) return res.status(404).json({ error: 'Foto no encontrada.' });
+  res.setHeader('Content-Type', photo.mime_type);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.send(Buffer.from(photo.image_base64, 'base64'));
+});
+
+app.get('/api/images/:id', async (req, res) => {
+  await ensureDatabase();
+  const [image] = await sql`
+    SELECT mime_type, encode(image_data, 'base64') AS image_base64
+    FROM generated_images
+    WHERE id = ${req.params.id}
+  `;
   if (!image) return res.status(404).json({ error: 'Imagen no encontrada.' });
-  res.download(path.join(GENERATED_DIR, image.filename), image.filename);
+  res.setHeader('Content-Type', image.mime_type);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.send(Buffer.from(image.image_base64, 'base64'));
+});
+
+app.get('/api/images/:id/download', async (req, res) => {
+  await ensureDatabase();
+  const [image] = await sql`
+    SELECT title, mime_type, encode(image_data, 'base64') AS image_base64
+    FROM generated_images
+    WHERE id = ${req.params.id}
+  `;
+  if (!image) return res.status(404).json({ error: 'Imagen no encontrada.' });
+  const filename = `${image.title.replace(/[^\w.-]+/g, '-') || 'imagen-producto'}.png`;
+  res.setHeader('Content-Type', image.mime_type);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(Buffer.from(image.image_base64, 'base64'));
 });
 
 app.post('/api/projects/:id/generate', async (req, res) => {
+  await ensureDatabase();
   if (!process.env.OPENAI_API_KEY) {
-    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en .env' });
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
   }
 
-  const db = readDb();
-  const project = db.projects.find((item) => item.id === Number(req.params.id));
+  const [project] = await sql`SELECT * FROM projects WHERE id = ${req.params.id}`;
   if (!project) return res.status(404).json({ error: 'Proyecto no encontrado.' });
 
-  const photos = db.sourcePhotos.filter((photo) => photo.project_id === project.id).slice(0, 8);
+  const photos = await sql`
+    SELECT id, mime_type, encode(image_data, 'base64') AS image_base64
+    FROM source_photos
+    WHERE project_id = ${req.params.id}
+    ORDER BY created_at ASC
+    LIMIT 8
+  `;
   if (!photos.length) return res.status(400).json({ error: 'Sube al menos una foto del producto antes de generar.' });
 
-  const settings = db.settings;
+  const settings = await settingsObject();
   const textModel = String(req.body?.textModel || settings.textModel);
   const imageModel = String(req.body?.imageModel || settings.imageModel);
   const requestedSize = String(req.body?.imageSize || settings.imageSize);
@@ -239,45 +348,38 @@ app.post('/api/projects/:id/generate', async (req, res) => {
     const b64 = response.data?.[0]?.b64_json;
     if (!b64) throw new Error('OpenAI no devolvio datos de imagen.');
 
-    const filename = `${project.id}-${Date.now()}-${Math.random().toString(16).slice(2)}.png`;
-    await fs.promises.writeFile(path.join(GENERATED_DIR, filename), Buffer.from(b64, 'base64'));
+    const [image] = await sql`
+      INSERT INTO generated_images (project_id, title, prompt, size, model, mime_type, image_data)
+      VALUES (
+        ${req.params.id},
+        ${item.title || 'Imagen generada'},
+        ${prompt},
+        ${requestedSize},
+        ${imageModel},
+        ${'image/png'},
+        decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex')
+      )
+      RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
+    `;
 
-    const image = {
-      id: nextId(db, 'generatedImages'),
-      project_id: project.id,
-      filename,
-      title: item.title || 'Imagen generada',
-      prompt,
-      size: requestedSize,
-      model: imageModel,
-      created_at: now()
-    };
-    db.generatedImages.push(image);
-    generated.push({ ...image, url: publicUrl('generated', filename), downloadUrl: `/api/images/${image.id}/download` });
+    generated.push(imageDto(image));
   }
 
-  project.updated_at = now();
-  writeDb(db);
+  await sql`UPDATE projects SET updated_at = now() WHERE id = ${req.params.id}`;
   res.json({ productSummary: promptPlan.product_summary, generated, prompts: selectedPrompts });
 });
 
 function normalizeImageSize(model, requestedSize) {
   if (requestedSize === 'auto') return 'auto';
-  if (/dall-e-2/i.test(model)) {
-    return requestedSize === '1024x1024' ? requestedSize : '1024x1024';
-  }
+  if (/dall-e-2/i.test(model)) return '1024x1024';
   return ['1024x1024', '1536x1024', '1024x1536'].includes(requestedSize) ? requestedSize : '1024x1024';
 }
 
 async function buildPromptPlan({ photos, textModel, promptTemplate, count }) {
-  const imageInputs = photos.map((photo) => {
-    const fullPath = path.join(UPLOAD_DIR, photo.filename);
-    const data = fs.readFileSync(fullPath).toString('base64');
-    return {
-      type: 'input_image',
-      image_url: `data:${photo.mime_type || 'image/jpeg'};base64,${data}`
-    };
-  });
+  const imageInputs = photos.map((photo) => ({
+    type: 'input_image',
+    image_url: `data:${photo.mime_type || 'image/jpeg'};base64,${photo.image_base64}`
+  }));
 
   const response = await client.responses.create({
     model: textModel,
@@ -330,6 +432,10 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: err.message || 'Error interno.' });
 });
 
-app.listen(PORT, () => {
-  console.log(`App lista en http://localhost:${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`App lista en http://localhost:${PORT}`);
+  });
+}
+
+export default app;
