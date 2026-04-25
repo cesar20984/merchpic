@@ -256,18 +256,42 @@ svg {
   margin-top: 10px;
 }
 
-.danger-action,
-.text-danger {
-  color: var(--danger);
+.danger-button,
+.download-button {
+  min-height: 44px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
   font-weight: 850;
+  text-decoration: none;
+  cursor: pointer;
 }
 
-.text-danger {
-  padding: 0;
-  min-height: auto;
+.danger-button {
+  width: 100%;
+  color: #fff;
+  background: var(--danger);
   border: 0;
-  background: transparent;
-  cursor: pointer;
+}
+
+.danger-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.danger-button.compact,
+.download-button {
+  flex: 1 1 0;
+  width: auto;
+  font-size: 13px;
+}
+
+.download-button {
+  color: var(--accent);
+  background: var(--soft);
 }
 
 .project-hero {

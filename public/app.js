@@ -102,7 +102,10 @@ function renderProjects() {
         <strong>${escapeHtml(project.name)}</strong>
         <span>${new Date(project.updated_at).toLocaleString()}</span>
         <span class="card-actions">
-          <span class="danger-action" data-delete-project="${project.id}">Borrar</span>
+          <button class="danger-button" type="button" data-delete-project="${project.id}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+            Borrar proyecto
+          </button>
         </span>
       </span>
     </button>
@@ -141,8 +144,11 @@ function renderProjectDetail() {
         <strong>${escapeHtml(image.title)}</strong>
         <span>${escapeHtml(image.size)} · ${escapeHtml(image.model)}</span>
         <span class="image-actions">
-          <a href="${image.downloadUrl}">Descargar</a>
-          <button class="text-danger" type="button" data-delete-image="${image.id}">Borrar</button>
+          <a class="download-button" href="${image.downloadUrl}">Descargar</a>
+          <button class="danger-button compact" type="button" data-delete-image="${image.id}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+            Borrar
+          </button>
         </span>
       </div>
     </article>
