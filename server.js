@@ -90,10 +90,20 @@ function ensureDatabase() {
         prompt TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         error TEXT,
+        openai_response_id TEXT,
+        response_status TEXT,
+        image_model TEXT,
+        image_size TEXT,
+        image_quality TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `;
+    await sql`ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS openai_response_id TEXT`;
+    await sql`ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS response_status TEXT`;
+    await sql`ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS image_model TEXT`;
+    await sql`ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS image_size TEXT`;
+    await sql`ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS image_quality TEXT`;
     await sql`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -170,6 +180,11 @@ function taskDto(task) {
     prompt: task.prompt,
     status: task.status,
     error: task.error,
+    openai_response_id: task.openai_response_id,
+    response_status: task.response_status,
+    image_model: task.image_model,
+    image_size: task.image_size,
+    image_quality: task.image_quality,
     created_at: task.created_at,
     updated_at: task.updated_at
   };
@@ -264,7 +279,7 @@ app.get('/api/projects/:id', async (req, res) => {
     ORDER BY created_at DESC
   `;
   const tasks = await sql`
-    SELECT id, project_id, title, prompt, status, error, created_at, updated_at
+    SELECT id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
     FROM generation_tasks
     WHERE project_id = ${req.params.id}
     ORDER BY created_at ASC
@@ -451,14 +466,14 @@ app.post('/api/projects/:id/generate-plan', async (req, res) => {
   const promptPlan = await buildPromptPlan({ photos, textModel, promptTemplate: settings.textPrompt, count });
   const selectedPrompts = promptPlan.prompts.slice(0, count);
 
-  await sql`DELETE FROM generation_tasks WHERE project_id = ${req.params.id}`;
+  await sql`DELETE FROM generation_tasks WHERE project_id = ${req.params.id} AND status <> 'processing'`;
 
   const tasks = [];
   for (const item of selectedPrompts) {
     const [task] = await sql`
       INSERT INTO generation_tasks (project_id, title, prompt)
       VALUES (${req.params.id}, ${item.title || 'Imagen generada'}, ${item.prompt})
-      RETURNING id, project_id, title, prompt, status, error, created_at, updated_at
+      RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
     `;
     tasks.push(taskDto(task));
   }
@@ -507,33 +522,51 @@ app.post('/api/generation-tasks/:taskId/generate', async (req, res) => {
   }
 
   const [task] = await sql`
-    SELECT id, project_id, title, prompt, status
+    SELECT id, project_id, title, prompt, status, openai_response_id, image_model, image_size, image_quality
     FROM generation_tasks
     WHERE id = ${req.params.taskId}
   `;
   if (!task) return res.status(404).json({ error: 'Tarea no encontrada.' });
 
-  const photos = await referencePhotos(task.project_id);
-  if (!photos.length) return res.status(400).json({ error: 'Sube al menos una foto del producto antes de generar.' });
-
-  const settings = await settingsObject();
-  await sql`
-    UPDATE generation_tasks
-    SET status = 'processing', error = NULL, updated_at = now()
-    WHERE id = ${req.params.taskId}
-  `;
+  if (task.openai_response_id && task.status === 'processing') {
+    const result = await finalizeBackgroundTask(task);
+    return res.json(result);
+  }
 
   try {
-    const image = await generateAndStoreImage({
-      projectId: task.project_id,
-      item: task,
+    const photos = await referencePhotos(task.project_id);
+    if (!photos.length) return res.status(400).json({ error: 'Sube al menos una foto del producto antes de generar.' });
+
+    const settings = await settingsObject();
+    const selectedImageModel = String(req.body?.imageModel || settings.imageModel);
+    const imageModel = /gpt-image/i.test(selectedImageModel) ? selectedImageModel : 'gpt-image-1';
+    const requestedSize = String(req.body?.imageSize || settings.imageSize);
+    const apiSize = normalizeImageSize(imageModel, requestedSize);
+    const quality = String(req.body?.imageQuality || settings.imageQuality || 'medium');
+    const suffix = String(settings.imagePromptSuffix || '');
+    const prompt = `${exactProductInstruction}\n\n${task.prompt}\n\n${suffix}`.trim();
+    const response = await createBackgroundImageResponse({
+      model: imageModel,
       photos,
-      settings,
-      body: req.body || {}
+      prompt,
+      size: apiSize,
+      quality
     });
-    await sql`DELETE FROM generation_tasks WHERE id = ${req.params.taskId}`;
-    await sql`UPDATE projects SET updated_at = now() WHERE id = ${task.project_id}`;
-    res.json({ generated: image });
+    const [updatedTask] = await sql`
+      UPDATE generation_tasks
+      SET
+        status = 'processing',
+        error = NULL,
+        openai_response_id = ${response.id},
+        response_status = ${response.status || 'queued'},
+        image_model = ${imageModel},
+        image_size = ${requestedSize},
+        image_quality = ${quality},
+        updated_at = now()
+      WHERE id = ${req.params.taskId}
+      RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
+    `;
+    res.json({ task: taskDto(updatedTask) });
   } catch (error) {
     await sql`
       UPDATE generation_tasks
@@ -542,6 +575,33 @@ app.post('/api/generation-tasks/:taskId/generate', async (req, res) => {
     `;
     throw error;
   }
+});
+
+app.get('/api/cron/poll-tasks', async (req, res) => {
+  await ensureDatabase();
+  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'No autorizado.' });
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
+  }
+
+  const tasks = await sql`
+    SELECT id, project_id, title, prompt, status, openai_response_id, image_model, image_size, image_quality
+    FROM generation_tasks
+    WHERE status = 'processing' AND openai_response_id IS NOT NULL
+    ORDER BY updated_at ASC
+    LIMIT 5
+  `;
+  const results = [];
+  for (const task of tasks) {
+    try {
+      results.push(await finalizeBackgroundTask(task));
+    } catch (error) {
+      results.push({ taskId: asNumber(task.id), error: error.message });
+    }
+  }
+  res.json({ checked: tasks.length, results });
 });
 
 function normalizeImageSize(model, requestedSize) {
@@ -601,6 +661,123 @@ async function generateAndStoreImage({ projectId, item, photos, settings, body }
   `;
 
   return imageDto(image);
+}
+
+async function createBackgroundImageResponse({ model, photos, prompt, size, quality }) {
+  const content = [
+    { type: 'input_text', text: prompt },
+    ...photos.map((photo) => ({
+      type: 'input_image',
+      image_url: `data:${photo.mime_type || 'image/jpeg'};base64,${photo.image_base64}`
+    }))
+  ];
+
+  const tool = {
+    type: 'image_generation',
+    model: 'gpt-image-1',
+    size,
+    quality,
+    output_format: 'jpeg',
+    output_compression: 90
+  };
+
+  if (supportsInputFidelity(model)) {
+    tool.input_fidelity = 'high';
+  }
+
+  const body = {
+    model: responseModelForImageWork(),
+    background: true,
+    store: true,
+    input: [{ role: 'user', content }],
+    tools: [tool],
+    tool_choice: { type: 'image_generation' }
+  };
+
+  const optionalParams = ['input_fidelity', 'output_compression', 'output_format'];
+  while (true) {
+    try {
+      return await client.responses.create(body);
+    } catch (error) {
+      const message = String(error.message || '');
+      const rejectedParam = optionalParams.find((param) => message.includes(`'${param}'`) || message.includes(param));
+      if (!rejectedParam || !Object.prototype.hasOwnProperty.call(tool, rejectedParam)) throw error;
+      delete tool[rejectedParam];
+    }
+  }
+}
+
+function responseModelForImageWork() {
+  return process.env.OPENAI_RESPONSE_MODEL || 'gpt-4.1';
+}
+
+async function finalizeBackgroundTask(task) {
+  const response = await client.responses.retrieve(task.openai_response_id);
+  const status = response.status || 'unknown';
+
+  if (status === 'queued' || status === 'in_progress') {
+    const [updatedTask] = await sql`
+      UPDATE generation_tasks
+      SET response_status = ${status}, updated_at = now()
+      WHERE id = ${task.id}
+      RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
+    `;
+    return { task: taskDto(updatedTask) };
+  }
+
+  if (status !== 'completed') {
+    const errorMessage = response.error?.message || `OpenAI termino con estado: ${status}`;
+    const [updatedTask] = await sql`
+      UPDATE generation_tasks
+      SET status = 'failed', response_status = ${status}, error = ${errorMessage}, updated_at = now()
+      WHERE id = ${task.id}
+      RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
+    `;
+    return { task: taskDto(updatedTask) };
+  }
+
+  const b64 = extractImageResult(response);
+  if (!b64) {
+    const [updatedTask] = await sql`
+      UPDATE generation_tasks
+      SET status = 'failed', response_status = ${status}, error = 'OpenAI completo la respuesta, pero no devolvio una imagen.', updated_at = now()
+      WHERE id = ${task.id}
+      RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
+    `;
+    return { task: taskDto(updatedTask) };
+  }
+
+  const [stillPending] = await sql`
+    SELECT id
+    FROM generation_tasks
+    WHERE id = ${task.id}
+  `;
+  if (!stillPending) return { task: null };
+
+  const [image] = await sql`
+    INSERT INTO generated_images (project_id, title, prompt, size, model, mime_type, image_data)
+    VALUES (
+      ${task.project_id},
+      ${task.title || 'Imagen generada'},
+      ${task.prompt},
+      ${task.image_size || '1024x1024'},
+      ${task.image_model || 'gpt-image-1'},
+      ${'image/jpeg'},
+      decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex')
+    )
+    RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
+  `;
+
+  await sql`DELETE FROM generation_tasks WHERE id = ${task.id}`;
+  await sql`UPDATE projects SET updated_at = now() WHERE id = ${task.project_id}`;
+  return { generated: imageDto(image) };
+}
+
+function extractImageResult(response) {
+  for (const item of response.output || []) {
+    if (item.type === 'image_generation_call' && item.result) return item.result;
+  }
+  return null;
 }
 
 async function createReferencedImage({ model, image, prompt, size, quality, outputFormat, outputCompression }) {

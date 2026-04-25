@@ -139,6 +139,21 @@ function renderProjectDetail() {
   els.sourcePhotos.innerHTML = detail.photos.map((photo) => `<img src="${photo.url}" alt="">`).join('');
   const taskCards = tasks.map((task) => {
     const isGenerating = String(state.generatingTaskId) === String(task.id);
+    const isProcessing = task.status === 'processing';
+    const statusText = isGenerating
+      ? 'Consultando OpenAI...'
+      : isProcessing
+        ? 'OpenAI sigue trabajando'
+        : task.status === 'failed'
+          ? 'Falló, puedes reintentar'
+          : 'Lista para crear';
+    const buttonText = isGenerating
+      ? 'Revisando...'
+      : isProcessing
+        ? 'Revisar'
+        : task.status === 'failed'
+          ? 'Reintentar'
+          : 'Crear imagen';
     return `
     <article class="image-card task-card ${isGenerating ? 'skeleton-card' : ''}">
       <div class="${isGenerating ? 'skeleton-image' : 'planned-image'}">
@@ -146,10 +161,10 @@ function renderProjectDetail() {
       </div>
       <div class="card-body">
         <strong>${escapeHtml(task.title)}</strong>
-        <span>${isGenerating ? 'Generando ahora...' : task.status === 'failed' ? 'Falló, puedes reintentar' : 'Lista para crear'}</span>
+        <span>${statusText}</span>
         <span class="image-actions">
           <button class="primary-button task-generate-button" type="button" data-generate-task="${task.id}" ${isGenerating ? 'disabled' : ''}>
-            ${isGenerating ? 'Creando...' : task.status === 'failed' ? 'Reintentar' : 'Crear imagen'}
+            ${buttonText}
           </button>
         </span>
       </div>
@@ -354,9 +369,9 @@ async function generateTask(taskId) {
   state.generatingTaskId = taskId;
   renderProjectDetail();
   try {
-    await api(`/api/generation-tasks/${taskId}/generate`, { method: 'POST' });
+    const result = await api(`/api/generation-tasks/${taskId}/generate`, { method: 'POST' });
     state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
-    showToast('Imagen creada.');
+    showToast(result.generated ? 'Imagen creada.' : 'OpenAI sigue generando. Puedes revisar de nuevo en un momento.');
   } finally {
     state.generatingTaskId = null;
     if (state.currentProjectId) {
