@@ -1,0 +1,17 @@
+{
+  "name": "fotos-para-productos",
+  "version": "1.0.0",
+  "description": "App mobile-first para crear fotos de productos con IA de OpenAI.",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "openai": "^4.87.3"
+  }
+}

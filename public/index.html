@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Fotos IA para Productos</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="icon-button ghost" id="backButton" title="Volver" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div>
+          <p class="eyebrow">Product Studio</p>
+          <h1 id="screenTitle">Proyectos</h1>
+        </div>
+        <button class="icon-button" id="settingsButton" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21a2 2 0 1 1-4 0v-.09A1.8 1.8 0 0 0 8.75 19a1.8 1.8 0 0 0-1.98.36l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.8 1.8 0 0 0 4.3 15a1.8 1.8 0 0 0-1.66-1.1H2.5a2 2 0 1 1 0-4h.14A1.8 1.8 0 0 0 4.3 8.8a1.8 1.8 0 0 0-.36-1.98l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.8 1.8 0 0 0 8.75 4.3a1.8 1.8 0 0 0 1.1-1.66V2.5a2 2 0 1 1 4 0v.14a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.8 1.8 0 0 0 19.4 8.8a1.8 1.8 0 0 0 1.66 1.1h.14a2 2 0 1 1 0 4h-.14A1.8 1.8 0 0 0 19.4 15Z"/></svg>
+        </button>
+      </header>
+
+      <main>
+        <section id="projectsScreen" class="screen active">
+          <form id="projectForm" class="project-form">
+            <input id="projectName" type="text" autocomplete="off" placeholder="Nombre del proyecto" required>
+            <button class="primary-button" type="submit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              Crear
+            </button>
+          </form>
+          <div id="projectsList" class="project-grid"></div>
+        </section>
+
+        <section id="detailScreen" class="screen">
+          <div class="project-hero">
+            <img id="projectThumb" alt="">
+            <div>
+              <p class="eyebrow">Proyecto</p>
+              <h2 id="projectTitle"></h2>
+            </div>
+          </div>
+
+          <div class="camera-panel">
+            <video id="cameraVideo" playsinline autoplay muted></video>
+            <canvas id="captureCanvas" hidden></canvas>
+            <div class="camera-actions">
+              <button class="secondary-button" id="cameraButton" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L8 6H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-1.5-2Z"/><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg>
+                Cámara
+              </button>
+              <button class="secondary-button" id="captureButton" type="button" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/></svg>
+                Foto
+              </button>
+              <button class="secondary-button" id="burstButton" type="button" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="13" height="13" rx="2"/><path d="M8 20h10a2 2 0 0 0 2-2V8"/></svg>
+                Ráfaga
+              </button>
+            </div>
+          </div>
+
+          <div class="upload-row">
+            <label class="secondary-button file-button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg>
+              Subir fotos
+              <input id="fileInput" type="file" accept="image/*" multiple>
+            </label>
+            <button class="primary-button" id="generateButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>
+              Generar
+            </button>
+          </div>
+
+          <section>
+            <div class="section-heading">
+              <h3>Fotos del producto</h3>
+              <span id="photoCount">0</span>
+            </div>
+            <div id="sourcePhotos" class="thumb-strip"></div>
+          </section>
+
+          <section>
+            <div class="section-heading">
+              <h3>Imágenes IA</h3>
+              <span id="imageCount">0</span>
+            </div>
+            <div id="generatedImages" class="image-grid"></div>
+          </section>
+        </section>
+
+        <section id="settingsScreen" class="screen">
+          <div class="settings-actions">
+            <button class="secondary-button" id="refreshModelsButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></svg>
+              Refrescar modelos
+            </button>
+            <button class="primary-button" id="saveSettingsButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+              Guardar
+            </button>
+          </div>
+
+          <div class="form-stack">
+            <label>Modelo de texto<select id="textModel"></select></label>
+            <label>Modelo de imagen<select id="imageModel"></select></label>
+            <label>Tamaño<select id="imageSize">
+              <option>1024x1024</option>
+              <option>1536x1024</option>
+              <option>1024x1536</option>
+              <option>auto</option>
+            </select></label>
+            <label>Calidad<select id="imageQuality">
+              <option>low</option>
+              <option>medium</option>
+              <option>high</option>
+              <option>auto</option>
+            </select></label>
+            <label>Cantidad<input id="promptCount" type="number" min="1" max="12"></label>
+            <label>Prompt para crear prompts<textarea id="textPrompt" rows="9"></textarea></label>
+            <label>Prompt fijo de imagen<textarea id="imagePromptSuffix" rows="6"></textarea></label>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
