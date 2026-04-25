@@ -3,7 +3,8 @@ const state = {
   currentProjectId: null,
   projectDetail: null,
   settings: {},
-  stream: null
+  stream: null,
+  generatingCount: 0
 };
 
 const $ = (id) => document.getElementById(id);
@@ -122,9 +123,18 @@ function renderProjectDetail() {
   els.projectThumb.src = project.thumbnailUrl || '';
   els.projectThumb.alt = project.name;
   els.photoCount.textContent = detail.photos.length;
-  els.imageCount.textContent = detail.images.length;
+  els.imageCount.textContent = detail.images.length + state.generatingCount;
   els.sourcePhotos.innerHTML = detail.photos.map((photo) => `<img src="${photo.url}" alt="">`).join('');
-  els.generatedImages.innerHTML = detail.images.map((image) => `
+  const skeletons = Array.from({ length: state.generatingCount }, (_item, index) => `
+    <article class="image-card skeleton-card" aria-label="Generando imagen ${index + 1}">
+      <div class="skeleton-image"></div>
+      <div class="card-body">
+        <strong>Generando...</strong>
+        <span>Imagen ${index + 1}</span>
+      </div>
+    </article>
+  `).join('');
+  els.generatedImages.innerHTML = skeletons + detail.images.map((image) => `
     <article class="image-card">
       <img src="${image.url}" alt="${escapeHtml(image.title)}">
       <div class="card-body">
@@ -184,17 +194,17 @@ async function prepareUploadFiles(files) {
 async function compressImage(file) {
   if (!file.type.startsWith('image/')) return file;
   const image = await loadImage(file);
-  const maxSide = 1400;
+  const maxSide = 1280;
   const ratio = Math.min(1, maxSide / Math.max(image.width, image.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(image.width * ratio));
   canvas.height = Math.max(1, Math.round(image.height * ratio));
   canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
 
-  for (const quality of [0.86, 0.78, 0.7, 0.62]) {
+  for (const quality of [0.84, 0.76, 0.68, 0.6]) {
     const blob = await canvasToBlob(canvas, quality);
     if (!blob) return file;
-    if (blob.size <= 850 * 1024 || quality === 0.62) {
+    if (blob.size <= 700 * 1024 || quality === 0.6) {
       return new File([blob], file.name.replace(/\.[^.]+$/, '.jpg') || `foto-${Date.now()}.jpg`, { type: 'image/jpeg' });
     }
   }
@@ -231,7 +241,7 @@ async function startCamera() {
     audio: false
   });
   els.cameraVideo.srcObject = state.stream;
-  els.cameraButton.textContent = 'Cerrar';
+  els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Cerrar';
   els.captureButton.disabled = false;
   els.burstButton.disabled = false;
 }
@@ -248,10 +258,13 @@ function stopCamera() {
 async function capturePhoto() {
   const video = els.cameraVideo;
   const canvas = els.captureCanvas;
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+  const maxSide = 1280;
+  const ratio = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
+  canvas.width = Math.max(1, Math.round(video.videoWidth * ratio));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * ratio));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.84));
+  if (!blob) throw new Error('No se pudo capturar la foto.');
   return new File([blob], `foto-${Date.now()}.jpg`, { type: 'image/jpeg' });
 }
 
@@ -274,15 +287,20 @@ async function burstCapture() {
 async function generateImages() {
   if (!state.currentProjectId) return;
   els.generateButton.disabled = true;
-  els.generateButton.textContent = 'Generando...';
+  state.generatingCount = Math.max(1, Math.min(12, Number(state.settings.promptCount || els.promptCount?.value || 8)));
+  renderProjectDetail();
+  els.generateButton.textContent = `Generando ${state.generatingCount}...`;
   try {
     const data = await api(`/api/projects/${state.currentProjectId}/generate`, { method: 'POST' });
     showToast(`${data.generated.length} imagen(es) generada(s).`);
     state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+    state.generatingCount = 0;
     renderProjectDetail();
   } finally {
+    state.generatingCount = 0;
     els.generateButton.disabled = false;
     els.generateButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>Generar';
+    if (state.projectDetail) renderProjectDetail();
   }
 }
 

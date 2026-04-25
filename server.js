@@ -367,16 +367,14 @@ app.post('/api/projects/:id/generate', async (req, res) => {
 
   for (const item of selectedPrompts) {
     const prompt = `${exactProductInstruction}\n\n${item.prompt}\n\n${suffix}`.trim();
-    const response = await client.images.edit({
+    const { response, mimeType } = await createReferencedImage({
       model: imageModel,
       image: referenceFiles,
       prompt,
       size: apiSize,
       quality,
-      n: 1,
-      input_fidelity: 'high',
-      output_format: 'jpeg',
-      output_compression: 85
+      outputFormat: 'jpeg',
+      outputCompression: 90
     });
 
     const b64 = response.data?.[0]?.b64_json;
@@ -390,7 +388,7 @@ app.post('/api/projects/:id/generate', async (req, res) => {
         ${prompt},
         ${requestedSize},
         ${imageModel},
-        ${'image/jpeg'},
+        ${mimeType},
         decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex')
       )
       RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
@@ -407,6 +405,41 @@ function normalizeImageSize(model, requestedSize) {
   if (requestedSize === 'auto') return 'auto';
   if (/dall-e-2/i.test(model)) return '1024x1024';
   return ['1024x1024', '1536x1024', '1024x1536'].includes(requestedSize) ? requestedSize : '1024x1024';
+}
+
+async function createReferencedImage({ model, image, prompt, size, quality, outputFormat, outputCompression }) {
+  const body = {
+    model,
+    image,
+    prompt,
+    size,
+    quality,
+    n: 1,
+    output_format: outputFormat,
+    output_compression: outputCompression
+  };
+
+  if (supportsInputFidelity(model)) {
+    body.input_fidelity = 'high';
+  }
+
+  const optionalParams = ['input_fidelity', 'output_compression', 'output_format'];
+  while (true) {
+    try {
+      const response = await client.images.edit(body);
+      const mimeType = body.output_format === 'jpeg' ? 'image/jpeg' : body.output_format === 'webp' ? 'image/webp' : 'image/png';
+      return { response, mimeType };
+    } catch (error) {
+      const message = String(error.message || '');
+      const rejectedParam = optionalParams.find((param) => message.includes(`'${param}'`) || message.includes(param));
+      if (!rejectedParam || !Object.prototype.hasOwnProperty.call(body, rejectedParam)) throw error;
+      delete body[rejectedParam];
+    }
+  }
+}
+
+function supportsInputFidelity(model) {
+  return /gpt-image-1(?:\.5|-mini)?$/i.test(model);
 }
 
 function mimeExtension(mimeType = '') {

@@ -96,6 +96,7 @@ textarea {
 
 .primary-button,
 .secondary-button,
+.shutter-button,
 .icon-button {
   border: 0;
   border-radius: 8px;
@@ -118,6 +119,29 @@ textarea {
   background: var(--soft);
   color: var(--ink);
   padding: 0 12px;
+}
+
+.shutter-button {
+  min-height: 58px;
+  background: #ffffff;
+  color: var(--ink);
+  border: 2px solid var(--accent);
+  padding: 0 10px;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.shutter-button span {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 5px #ffffff, 0 0 0 2px var(--accent);
+}
+
+.shutter-button:active span {
+  transform: scale(0.92);
 }
 
 .icon-button {
@@ -177,6 +201,28 @@ svg {
   object-fit: cover;
   display: block;
   background: #e8efeb;
+}
+
+.skeleton-image {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: linear-gradient(90deg, #e4ece8 0%, #f6faf8 45%, #e4ece8 90%);
+  background-size: 220% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+.skeleton-card {
+  pointer-events: none;
+}
+
+.skeleton-card strong,
+.skeleton-card span {
+  color: var(--muted);
+}
+
+@keyframes shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
 }
 
 .placeholder-thumb {
