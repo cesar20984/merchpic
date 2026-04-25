@@ -96,19 +96,21 @@ function renderProjects() {
     return;
   }
   els.projectsList.innerHTML = state.projects.map((project) => `
-    <button class="project-card" type="button" data-project="${project.id}">
-      ${project.thumbnailUrl ? `<img src="${project.thumbnailUrl}" alt="">` : '<div class="placeholder-thumb">Sin fotos</div>'}
-      <span class="card-body">
+    <article class="project-card" data-project="${project.id}">
+      <button class="project-open" type="button" data-project="${project.id}">
+        ${project.thumbnailUrl ? `<img src="${project.thumbnailUrl}" alt="">` : '<span class="placeholder-thumb">Sin fotos</span>'}
+      </button>
+      <div class="card-body">
         <strong>${escapeHtml(project.name)}</strong>
         <span>${new Date(project.updated_at).toLocaleString()}</span>
         <span class="card-actions">
-          <button class="danger-button" type="button" data-delete-project="${project.id}">
+          <button class="danger-button compact" type="button" data-delete-project="${project.id}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
-            Borrar proyecto
+            Borrar
           </button>
         </span>
-      </span>
-    </button>
+      </div>
+    </article>
   `).join('');
 }
 
@@ -293,12 +295,34 @@ async function burstCapture() {
 async function generateImages() {
   if (!state.currentProjectId) return;
   els.generateButton.disabled = true;
-  state.generatingCount = Math.max(1, Math.min(12, Number(state.settings.promptCount || els.promptCount?.value || 8)));
+  const requestedCount = Math.max(1, Math.min(12, Number(state.settings.promptCount || els.promptCount?.value || 8)));
+  state.generatingCount = requestedCount;
   renderProjectDetail();
-  els.generateButton.textContent = `Generando ${state.generatingCount}...`;
+  els.generateButton.textContent = 'Preparando...';
   try {
-    const data = await api(`/api/projects/${state.currentProjectId}/generate`, { method: 'POST' });
-    showToast(`${data.generated.length} imagen(es) generada(s).`);
+    const plan = await api(`/api/projects/${state.currentProjectId}/generate-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count: requestedCount })
+    });
+    const prompts = plan.prompts || [];
+    state.generatingCount = prompts.length;
+    renderProjectDetail();
+
+    let completed = 0;
+    for (const item of prompts) {
+      els.generateButton.textContent = `Generando ${completed + 1}/${prompts.length}`;
+      await api(`/api/projects/${state.currentProjectId}/generate-one`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item)
+      });
+      completed += 1;
+      state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+      state.generatingCount = Math.max(0, prompts.length - completed);
+      renderProjectDetail();
+    }
+    showToast(`${completed} imagen(es) generada(s).`);
     state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
     state.generatingCount = 0;
     renderProjectDetail();

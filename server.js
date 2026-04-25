@@ -401,10 +401,117 @@ app.post('/api/projects/:id/generate', async (req, res) => {
   res.json({ productSummary: promptPlan.product_summary, generated, prompts: selectedPrompts });
 });
 
+app.post('/api/projects/:id/generate-plan', async (req, res) => {
+  await ensureDatabase();
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
+  }
+
+  const [project] = await sql`SELECT * FROM projects WHERE id = ${req.params.id}`;
+  if (!project) return res.status(404).json({ error: 'Proyecto no encontrado.' });
+
+  const photos = await referencePhotos(req.params.id);
+  if (!photos.length) return res.status(400).json({ error: 'Sube al menos una foto del producto antes de generar.' });
+
+  const settings = await settingsObject();
+  const count = Math.max(1, Math.min(12, Number(req.body?.count || settings.promptCount || 8)));
+  const textModel = String(req.body?.textModel || settings.textModel);
+  const promptPlan = await buildPromptPlan({ photos, textModel, promptTemplate: settings.textPrompt, count });
+
+  res.json({
+    productSummary: promptPlan.product_summary,
+    prompts: promptPlan.prompts.slice(0, count)
+  });
+});
+
+app.post('/api/projects/:id/generate-one', async (req, res) => {
+  await ensureDatabase();
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
+  }
+
+  const [project] = await sql`SELECT * FROM projects WHERE id = ${req.params.id}`;
+  if (!project) return res.status(404).json({ error: 'Proyecto no encontrado.' });
+
+  const item = {
+    title: String(req.body?.title || 'Imagen generada'),
+    prompt: String(req.body?.prompt || '').trim()
+  };
+  if (!item.prompt) return res.status(400).json({ error: 'Falta el prompt de la imagen.' });
+
+  const photos = await referencePhotos(req.params.id);
+  if (!photos.length) return res.status(400).json({ error: 'Sube al menos una foto del producto antes de generar.' });
+
+  const settings = await settingsObject();
+  const image = await generateAndStoreImage({
+    projectId: req.params.id,
+    item,
+    photos,
+    settings,
+    body: req.body || {}
+  });
+
+  await sql`UPDATE projects SET updated_at = now() WHERE id = ${req.params.id}`;
+  res.json({ generated: image });
+});
+
 function normalizeImageSize(model, requestedSize) {
   if (requestedSize === 'auto') return 'auto';
   if (/dall-e-2/i.test(model)) return '1024x1024';
   return ['1024x1024', '1536x1024', '1024x1536'].includes(requestedSize) ? requestedSize : '1024x1024';
+}
+
+async function referencePhotos(projectId) {
+  return sql`
+    SELECT id, original_name, mime_type, encode(image_data, 'base64') AS image_base64
+    FROM source_photos
+    WHERE project_id = ${projectId}
+    ORDER BY created_at ASC
+    LIMIT 8
+  `;
+}
+
+async function generateAndStoreImage({ projectId, item, photos, settings, body }) {
+  const selectedImageModel = String(body?.imageModel || settings.imageModel);
+  const imageModel = /gpt-image/i.test(selectedImageModel) ? selectedImageModel : 'gpt-image-1';
+  const requestedSize = String(body?.imageSize || settings.imageSize);
+  const apiSize = normalizeImageSize(imageModel, requestedSize);
+  const quality = String(body?.imageQuality || settings.imageQuality || 'medium');
+  const suffix = String(settings.imagePromptSuffix || '');
+  const referenceFiles = await Promise.all(photos.map((photo, index) => {
+    const extension = mimeExtension(photo.mime_type);
+    const name = photo.original_name || `product-reference-${index + 1}.${extension}`;
+    return toFile(Buffer.from(photo.image_base64, 'base64'), name, { type: photo.mime_type });
+  }));
+  const prompt = `${exactProductInstruction}\n\n${item.prompt}\n\n${suffix}`.trim();
+  const { response, mimeType } = await createReferencedImage({
+    model: imageModel,
+    image: referenceFiles,
+    prompt,
+    size: apiSize,
+    quality,
+    outputFormat: 'jpeg',
+    outputCompression: 90
+  });
+
+  const b64 = response.data?.[0]?.b64_json;
+  if (!b64) throw new Error('OpenAI no devolvio datos de imagen.');
+
+  const [image] = await sql`
+    INSERT INTO generated_images (project_id, title, prompt, size, model, mime_type, image_data)
+    VALUES (
+      ${projectId},
+      ${item.title || 'Imagen generada'},
+      ${prompt},
+      ${requestedSize},
+      ${imageModel},
+      ${mimeType},
+      decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex')
+    )
+    RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
+  `;
+
+  return imageDto(image);
 }
 
 async function createReferencedImage({ model, image, prompt, size, quality, outputFormat, outputCompression }) {

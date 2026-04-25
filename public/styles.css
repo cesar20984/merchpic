@@ -189,11 +189,19 @@ svg {
 
 .project-card {
   text-align: left;
-  padding: 0;
   cursor: pointer;
 }
 
-.project-card img,
+.project-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-open img,
 .placeholder-thumb,
 .image-card img {
   width: 100%;
@@ -251,9 +259,13 @@ svg {
 .image-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   margin-top: 10px;
+}
+
+.image-actions {
+  justify-content: space-between;
 }
 
 .danger-button,
@@ -271,7 +283,7 @@ svg {
 }
 
 .danger-button {
-  width: 100%;
+  width: auto;
   color: #fff;
   background: var(--danger);
   border: 0;
