@@ -25,7 +25,6 @@ const els = {
   captureCanvas: $('captureCanvas'),
   cameraButton: $('cameraButton'),
   captureButton: $('captureButton'),
-  burstButton: $('burstButton'),
   fileInput: $('fileInput'),
   generateButton: $('generateButton'),
   sourcePhotos: $('sourcePhotos'),
@@ -45,6 +44,7 @@ const els = {
   modalTitle: $('modalTitle'),
   modalImage: $('modalImage'),
   modalDownload: $('modalDownload'),
+  modalSaveButton: $('modalSaveButton'),
   modalDeleteButton: $('modalDeleteButton'),
   modalCloseButton: $('modalCloseButton'),
   toast: $('toast')
@@ -89,6 +89,10 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#039;'
   }[char]));
+}
+
+function isIOSDevice() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
 async function loadProjects() {
@@ -140,6 +144,7 @@ function renderProjectDetail() {
   const taskCards = tasks.map((task) => {
     const isGenerating = String(state.generatingTaskId) === String(task.id);
     const isProcessing = task.status === 'processing';
+    const isActive = isGenerating || isProcessing;
     const statusText = isGenerating
       ? 'Consultando OpenAI...'
       : isProcessing
@@ -155,8 +160,8 @@ function renderProjectDetail() {
           ? 'Reintentar'
           : 'Crear imagen';
     return `
-    <article class="image-card task-card ${isGenerating ? 'skeleton-card' : ''}">
-      <div class="${isGenerating ? 'skeleton-image' : 'planned-image'}">
+    <article class="image-card task-card ${isActive ? 'skeleton-card' : ''}">
+      <div class="${isActive ? 'skeleton-image' : 'planned-image'}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>
       </div>
       <div class="card-body">
@@ -171,14 +176,16 @@ function renderProjectDetail() {
     </article>
   `;
   }).join('');
-  els.generatedImages.innerHTML = taskCards + detail.images.map((image) => `
+  const imageCards = detail.images.map((image) => `
     <article class="image-card" data-open-image="${image.id}">
       <img src="${image.url}" alt="${escapeHtml(image.title)}">
       <div class="card-body">
         <strong>${escapeHtml(image.title)}</strong>
         <span>${escapeHtml(image.size)} · ${escapeHtml(image.model)}</span>
         <span class="image-actions">
-          <a class="download-button" href="${image.downloadUrl}">Descargar</a>
+          ${isIOSDevice()
+            ? `<button class="download-button" type="button" data-save-image="${image.id}">Guardar</button>`
+            : `<a class="download-button" href="${image.downloadUrl}">Descargar</a>`}
           <button class="danger-button compact" type="button" data-delete-image="${image.id}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
             Borrar
@@ -187,6 +194,7 @@ function renderProjectDetail() {
       </div>
     </article>
   `).join('');
+  els.generatedImages.innerHTML = imageCards + taskCards;
 }
 
 function openImageModal(id) {
@@ -196,6 +204,9 @@ function openImageModal(id) {
   els.modalImage.src = image.url;
   els.modalImage.alt = image.title;
   els.modalDownload.href = image.downloadUrl;
+  els.modalDownload.hidden = isIOSDevice();
+  els.modalSaveButton.hidden = !isIOSDevice();
+  els.modalSaveButton.dataset.saveImage = image.id;
   els.modalDeleteButton.dataset.deleteImage = image.id;
   els.imageModal.hidden = false;
   document.body.classList.add('modal-open');
@@ -227,6 +238,29 @@ async function deleteGeneratedImage(id) {
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
   showToast('Imagen borrada.');
+}
+
+async function saveImageToPhone(id) {
+  const image = state.projectDetail?.images.find((item) => String(item.id) === String(id));
+  if (!image) return;
+
+  if (!navigator.share || typeof File === 'undefined') {
+    showToast('Tu navegador no permite guardar en galeria desde la app.');
+    return;
+  }
+
+  const response = await fetch(image.url);
+  const blob = await response.blob();
+  const file = new File([blob], `${image.title.replace(/[^\w.-]+/g, '-') || 'imagen-producto'}.jpg`, { type: blob.type || 'image/jpeg' });
+  if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+    showToast('Tu navegador no permite compartir esta imagen.');
+    return;
+  }
+
+  await navigator.share({
+    files: [file],
+    title: image.title
+  });
 }
 
 async function uploadFiles(files) {
@@ -302,7 +336,6 @@ async function startCamera() {
   els.cameraVideo.srcObject = state.stream;
   els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Cerrar';
   els.captureButton.disabled = false;
-  els.burstButton.disabled = false;
 }
 
 function stopCamera() {
@@ -311,7 +344,6 @@ function stopCamera() {
   els.cameraVideo.srcObject = null;
   els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L8 6H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-1.5-2Z"/><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg>Cámara';
   els.captureButton.disabled = true;
-  els.burstButton.disabled = true;
 }
 
 async function capturePhoto() {
@@ -330,17 +362,6 @@ async function capturePhoto() {
 async function captureAndUpload() {
   const file = await capturePhoto();
   await uploadFiles([file]);
-}
-
-async function burstCapture() {
-  els.burstButton.disabled = true;
-  const files = [];
-  for (let i = 0; i < 5; i += 1) {
-    files.push(await capturePhoto());
-    await new Promise((resolve) => setTimeout(resolve, 450));
-  }
-  await uploadFiles(files);
-  els.burstButton.disabled = false;
 }
 
 async function generateImages() {
@@ -446,6 +467,12 @@ els.projectsList.addEventListener('click', (event) => {
 });
 
 els.generatedImages.addEventListener('click', (event) => {
+  const saveButton = event.target.closest('[data-save-image]');
+  if (saveButton) {
+    event.stopPropagation();
+    saveImageToPhone(saveButton.dataset.saveImage).catch((err) => showToast(err.message));
+    return;
+  }
   const taskButton = event.target.closest('[data-generate-task]');
   if (taskButton) {
     event.stopPropagation();
@@ -470,6 +497,9 @@ els.imageModal.addEventListener('click', (event) => {
 els.modalDeleteButton.addEventListener('click', () => {
   deleteGeneratedImage(els.modalDeleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
 });
+els.modalSaveButton.addEventListener('click', () => {
+  saveImageToPhone(els.modalSaveButton.dataset.saveImage).catch((err) => showToast(err.message));
+});
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.imageModal.hidden) closeImageModal();
 });
@@ -491,7 +521,6 @@ els.settingsButton.addEventListener('click', async () => {
 
 els.cameraButton.addEventListener('click', () => startCamera().catch((err) => showToast(err.message)));
 els.captureButton.addEventListener('click', () => captureAndUpload().catch((err) => showToast(err.message)));
-els.burstButton.addEventListener('click', () => burstCapture().catch((err) => showToast(err.message)));
 els.fileInput.addEventListener('change', (event) => uploadFiles([...event.target.files]).catch((err) => showToast(err.message)));
 els.generateButton.addEventListener('click', () => generateImages().catch((err) => showToast(err.message)));
 els.refreshModelsButton.addEventListener('click', () => refreshModels().catch((err) => showToast(err.message)));
