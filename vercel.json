@@ -11,7 +11,7 @@
   "crons": [
     {
       "path": "/api/cron/poll-tasks",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
