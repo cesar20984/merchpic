@@ -100,6 +100,9 @@ function renderProjects() {
       <span class="card-body">
         <strong>${escapeHtml(project.name)}</strong>
         <span>${new Date(project.updated_at).toLocaleString()}</span>
+        <span class="card-actions">
+          <span class="danger-action" data-delete-project="${project.id}">Borrar</span>
+        </span>
       </span>
     </button>
   `).join('');
@@ -127,20 +130,95 @@ function renderProjectDetail() {
       <div class="card-body">
         <strong>${escapeHtml(image.title)}</strong>
         <span>${escapeHtml(image.size)} · ${escapeHtml(image.model)}</span>
-        <a href="${image.downloadUrl}">Descargar</a>
+        <span class="image-actions">
+          <a href="${image.downloadUrl}">Descargar</a>
+          <button class="text-danger" type="button" data-delete-image="${image.id}">Borrar</button>
+        </span>
       </div>
     </article>
   `).join('');
 }
 
+async function deleteProject(id) {
+  if (!confirm('Borrar este proyecto y todo su contenido?')) return;
+  await api(`/api/projects/${id}`, { method: 'DELETE' });
+  if (String(state.currentProjectId) === String(id)) {
+    state.currentProjectId = null;
+    state.projectDetail = null;
+    stopCamera();
+    showScreen('projects');
+  }
+  await loadProjects();
+  showToast('Proyecto borrado.');
+}
+
+async function deleteGeneratedImage(id) {
+  if (!confirm('Borrar esta imagen generada?')) return;
+  await api(`/api/images/${id}`, { method: 'DELETE' });
+  state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+  renderProjectDetail();
+  showToast('Imagen borrada.');
+}
+
 async function uploadFiles(files) {
   if (!state.currentProjectId || !files.length) return;
+  const preparedFiles = await prepareUploadFiles(files);
   const form = new FormData();
-  for (const file of files) form.append('photos', file);
+  for (const file of preparedFiles) form.append('photos', file);
   await api(`/api/projects/${state.currentProjectId}/photos`, { method: 'POST', body: form });
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
-  showToast(`${files.length} foto(s) guardada(s).`);
+  showToast(`${preparedFiles.length} foto(s) guardada(s).`);
+}
+
+async function prepareUploadFiles(files) {
+  const selected = files.slice(0, 6);
+  if (files.length > selected.length) showToast('Se subiran maximo 6 fotos por vez.');
+  const converted = [];
+  for (const file of selected) {
+    converted.push(await compressImage(file));
+  }
+  return converted;
+}
+
+async function compressImage(file) {
+  if (!file.type.startsWith('image/')) return file;
+  const image = await loadImage(file);
+  const maxSide = 1400;
+  const ratio = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.width * ratio));
+  canvas.height = Math.max(1, Math.round(image.height * ratio));
+  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  for (const quality of [0.86, 0.78, 0.7, 0.62]) {
+    const blob = await canvasToBlob(canvas, quality);
+    if (!blob) return file;
+    if (blob.size <= 850 * 1024 || quality === 0.62) {
+      return new File([blob], file.name.replace(/\.[^.]+$/, '.jpg') || `foto-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    }
+  }
+  return file;
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('No se pudo procesar una imagen.'));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToBlob(canvas, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
 }
 
 async function startCamera() {
@@ -261,8 +339,21 @@ els.projectForm.addEventListener('submit', async (event) => {
 });
 
 els.projectsList.addEventListener('click', (event) => {
+  const deleteButton = event.target.closest('[data-delete-project]');
+  if (deleteButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    deleteProject(deleteButton.dataset.deleteProject).catch((err) => showToast(err.message));
+    return;
+  }
   const card = event.target.closest('[data-project]');
   if (card) openProject(card.dataset.project).catch((err) => showToast(err.message));
+});
+
+els.generatedImages.addEventListener('click', (event) => {
+  const deleteButton = event.target.closest('[data-delete-image]');
+  if (!deleteButton) return;
+  deleteGeneratedImage(deleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
 });
 
 els.backButton.addEventListener('click', () => {

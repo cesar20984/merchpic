@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import multer from 'multer';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 import { neon } from '@neondatabase/serverless';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -26,11 +26,13 @@ Los prompts deben mantener el mismo producto y variar: varios angulos, interior 
   imagePromptSuffix: `Fotografia comercial realista de producto, alta nitidez, iluminacion profesional, materiales fieles, sin texto inventado, sin logos falsos, sin deformar el producto.`
 };
 
+const exactProductInstruction = `Usa las imagenes de entrada como referencia estricta del producto exacto. Conserva su forma, proporciones, materiales, colores, textura, detalles visibles, empaque, marcas o etiquetas reales si existen. No inventes un producto parecido ni cambies el diseno. Solo cambia camara, escena, fondo, iluminacion, uso o contexto segun se pida.`;
+
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-key' });
 const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024, files: 12 },
+  limits: { fileSize: 1024 * 1024, files: 6 },
   fileFilter: (_req, file, cb) => {
     cb(null, /^image\/(png|jpe?g|webp)$/i.test(file.mimetype));
   }
@@ -185,7 +187,7 @@ app.get('/api/models', async (_req, res) => {
   }
   const list = await client.models.list();
   const ids = list.data.map((model) => model.id).sort();
-  const imageModels = ids.filter((id) => /image|dall-e/i.test(id));
+  const imageModels = ids.filter((id) => /gpt-image/i.test(id));
   const textModels = ids.filter((id) => /^(gpt|o\d|chatgpt)/i.test(id) && !/image|audio|tts|transcribe|realtime|search/i.test(id));
   res.json({ textModels, imageModels, allModels: ids });
 });
@@ -206,6 +208,17 @@ app.post('/api/projects', async (req, res) => {
     RETURNING *
   `;
   res.status(201).json(projectDto(project));
+});
+
+app.delete('/api/projects/:id', async (req, res) => {
+  await ensureDatabase();
+  const deleted = await sql`
+    DELETE FROM projects
+    WHERE id = ${req.params.id}
+    RETURNING id
+  `;
+  if (!deleted.length) return res.status(404).json({ error: 'Proyecto no encontrado.' });
+  res.json({ ok: true });
 });
 
 app.get('/api/projects/:id', async (req, res) => {
@@ -304,6 +317,17 @@ app.get('/api/images/:id/download', async (req, res) => {
   res.send(Buffer.from(image.image_base64, 'base64'));
 });
 
+app.delete('/api/images/:id', async (req, res) => {
+  await ensureDatabase();
+  const deleted = await sql`
+    DELETE FROM generated_images
+    WHERE id = ${req.params.id}
+    RETURNING id
+  `;
+  if (!deleted.length) return res.status(404).json({ error: 'Imagen no encontrada.' });
+  res.json({ ok: true });
+});
+
 app.post('/api/projects/:id/generate', async (req, res) => {
   await ensureDatabase();
   if (!process.env.OPENAI_API_KEY) {
@@ -314,7 +338,7 @@ app.post('/api/projects/:id/generate', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Proyecto no encontrado.' });
 
   const photos = await sql`
-    SELECT id, mime_type, encode(image_data, 'base64') AS image_base64
+    SELECT id, original_name, mime_type, encode(image_data, 'base64') AS image_base64
     FROM source_photos
     WHERE project_id = ${req.params.id}
     ORDER BY created_at ASC
@@ -324,7 +348,8 @@ app.post('/api/projects/:id/generate', async (req, res) => {
 
   const settings = await settingsObject();
   const textModel = String(req.body?.textModel || settings.textModel);
-  const imageModel = String(req.body?.imageModel || settings.imageModel);
+  const selectedImageModel = String(req.body?.imageModel || settings.imageModel);
+  const imageModel = /gpt-image/i.test(selectedImageModel) ? selectedImageModel : 'gpt-image-1';
   const requestedSize = String(req.body?.imageSize || settings.imageSize);
   const apiSize = normalizeImageSize(imageModel, requestedSize);
   const count = Math.max(1, Math.min(12, Number(req.body?.count || settings.promptCount || 8)));
@@ -333,16 +358,25 @@ app.post('/api/projects/:id/generate', async (req, res) => {
 
   const promptPlan = await buildPromptPlan({ photos, textModel, promptTemplate: settings.textPrompt, count });
   const selectedPrompts = promptPlan.prompts.slice(0, count);
+  const referenceFiles = await Promise.all(photos.map((photo, index) => {
+    const extension = mimeExtension(photo.mime_type);
+    const name = photo.original_name || `product-reference-${index + 1}.${extension}`;
+    return toFile(Buffer.from(photo.image_base64, 'base64'), name, { type: photo.mime_type });
+  }));
   const generated = [];
 
   for (const item of selectedPrompts) {
-    const prompt = `${item.prompt}\n\n${suffix}`.trim();
-    const response = await client.images.generate({
+    const prompt = `${exactProductInstruction}\n\n${item.prompt}\n\n${suffix}`.trim();
+    const response = await client.images.edit({
       model: imageModel,
+      image: referenceFiles,
       prompt,
       size: apiSize,
       quality,
-      n: 1
+      n: 1,
+      input_fidelity: 'high',
+      output_format: 'jpeg',
+      output_compression: 85
     });
 
     const b64 = response.data?.[0]?.b64_json;
@@ -356,7 +390,7 @@ app.post('/api/projects/:id/generate', async (req, res) => {
         ${prompt},
         ${requestedSize},
         ${imageModel},
-        ${'image/png'},
+        ${'image/jpeg'},
         decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex')
       )
       RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
@@ -373,6 +407,12 @@ function normalizeImageSize(model, requestedSize) {
   if (requestedSize === 'auto') return 'auto';
   if (/dall-e-2/i.test(model)) return '1024x1024';
   return ['1024x1024', '1536x1024', '1024x1536'].includes(requestedSize) ? requestedSize : '1024x1024';
+}
+
+function mimeExtension(mimeType = '') {
+  if (mimeType.includes('png')) return 'png';
+  if (mimeType.includes('webp')) return 'webp';
+  return 'jpg';
 }
 
 async function buildPromptPlan({ photos, textModel, promptTemplate, count }) {

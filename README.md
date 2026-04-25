@@ -31,4 +31,6 @@ Para correr local tambien necesitas `OPENAI_API_KEY` y `DATABASE_URL` en `.env`.
 
 - Las fotos originales y las imagenes generadas se guardan en Neon.
 - Vercel no mantiene archivos subidos en disco, por eso la app no depende de carpetas locales para produccion.
+- La generacion usa las fotos del producto como imagenes de referencia con el endpoint de edicion de imagenes de OpenAI.
+- El navegador comprime las fotos antes de subirlas para reducir errores por limite de payload en Vercel.
 - Si el uso crece mucho, conviene mover los binarios a Vercel Blob o S3 y dejar en Neon solo metadatos y URLs.

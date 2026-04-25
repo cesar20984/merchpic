@@ -201,6 +201,29 @@ svg {
   font-size: 12px;
 }
 
+.card-actions,
+.image-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.danger-action,
+.text-danger {
+  color: var(--danger);
+  font-weight: 850;
+}
+
+.text-danger {
+  padding: 0;
+  min-height: auto;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
 .project-hero {
   display: grid;
   grid-template-columns: 76px 1fr;
