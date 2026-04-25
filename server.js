@@ -83,6 +83,18 @@ function ensureDatabase() {
       )
     `;
     await sql`
+      CREATE TABLE IF NOT EXISTS generation_tasks (
+        id BIGSERIAL PRIMARY KEY,
+        project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -147,6 +159,19 @@ function imageDto(image) {
     created_at: image.created_at,
     url: `/api/images/${image.id}`,
     downloadUrl: `/api/images/${image.id}/download`
+  };
+}
+
+function taskDto(task) {
+  return {
+    id: asNumber(task.id),
+    project_id: asNumber(task.project_id),
+    title: task.title,
+    prompt: task.prompt,
+    status: task.status,
+    error: task.error,
+    created_at: task.created_at,
+    updated_at: task.updated_at
   };
 }
 
@@ -238,11 +263,18 @@ app.get('/api/projects/:id', async (req, res) => {
     WHERE project_id = ${req.params.id}
     ORDER BY created_at DESC
   `;
+  const tasks = await sql`
+    SELECT id, project_id, title, prompt, status, error, created_at, updated_at
+    FROM generation_tasks
+    WHERE project_id = ${req.params.id}
+    ORDER BY created_at ASC
+  `;
 
   res.json({
     project: projectDto(project),
     photos: photos.map(photoDto),
-    images: images.map(imageDto)
+    images: images.map(imageDto),
+    tasks: tasks.map(taskDto)
   });
 });
 
@@ -417,10 +449,23 @@ app.post('/api/projects/:id/generate-plan', async (req, res) => {
   const count = Math.max(1, Math.min(12, Number(req.body?.count || settings.promptCount || 8)));
   const textModel = String(req.body?.textModel || settings.textModel);
   const promptPlan = await buildPromptPlan({ photos, textModel, promptTemplate: settings.textPrompt, count });
+  const selectedPrompts = promptPlan.prompts.slice(0, count);
+
+  await sql`DELETE FROM generation_tasks WHERE project_id = ${req.params.id}`;
+
+  const tasks = [];
+  for (const item of selectedPrompts) {
+    const [task] = await sql`
+      INSERT INTO generation_tasks (project_id, title, prompt)
+      VALUES (${req.params.id}, ${item.title || 'Imagen generada'}, ${item.prompt})
+      RETURNING id, project_id, title, prompt, status, error, created_at, updated_at
+    `;
+    tasks.push(taskDto(task));
+  }
 
   res.json({
     productSummary: promptPlan.product_summary,
-    prompts: promptPlan.prompts.slice(0, count)
+    tasks
   });
 });
 
@@ -453,6 +498,50 @@ app.post('/api/projects/:id/generate-one', async (req, res) => {
 
   await sql`UPDATE projects SET updated_at = now() WHERE id = ${req.params.id}`;
   res.json({ generated: image });
+});
+
+app.post('/api/generation-tasks/:taskId/generate', async (req, res) => {
+  await ensureDatabase();
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
+  }
+
+  const [task] = await sql`
+    SELECT id, project_id, title, prompt, status
+    FROM generation_tasks
+    WHERE id = ${req.params.taskId}
+  `;
+  if (!task) return res.status(404).json({ error: 'Tarea no encontrada.' });
+
+  const photos = await referencePhotos(task.project_id);
+  if (!photos.length) return res.status(400).json({ error: 'Sube al menos una foto del producto antes de generar.' });
+
+  const settings = await settingsObject();
+  await sql`
+    UPDATE generation_tasks
+    SET status = 'processing', error = NULL, updated_at = now()
+    WHERE id = ${req.params.taskId}
+  `;
+
+  try {
+    const image = await generateAndStoreImage({
+      projectId: task.project_id,
+      item: task,
+      photos,
+      settings,
+      body: req.body || {}
+    });
+    await sql`DELETE FROM generation_tasks WHERE id = ${req.params.taskId}`;
+    await sql`UPDATE projects SET updated_at = now() WHERE id = ${task.project_id}`;
+    res.json({ generated: image });
+  } catch (error) {
+    await sql`
+      UPDATE generation_tasks
+      SET status = 'failed', error = ${error.message || 'No se pudo generar la imagen.'}, updated_at = now()
+      WHERE id = ${req.params.taskId}
+    `;
+    throw error;
+  }
 });
 
 function normalizeImageSize(model, requestedSize) {

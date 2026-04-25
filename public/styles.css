@@ -223,6 +223,20 @@ svg {
   animation: shimmer 1.2s ease-in-out infinite;
 }
 
+.planned-image {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  background: #edf5f2;
+  color: var(--accent);
+}
+
+.planned-image svg {
+  width: 34px;
+  height: 34px;
+}
+
 .skeleton-card {
   pointer-events: none;
 }
@@ -480,6 +494,16 @@ video {
 .modal-actions .download-button,
 .modal-actions .danger-button {
   flex: 1 1 0;
+}
+
+.task-card {
+  cursor: default;
+}
+
+.task-generate-button {
+  width: 100%;
+  min-height: 44px;
+  font-size: 13px;
 }
 
 @media (min-width: 680px) {

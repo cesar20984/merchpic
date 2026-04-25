@@ -4,7 +4,7 @@ const state = {
   projectDetail: null,
   settings: {},
   stream: null,
-  generatingCount: 0
+  generatingTaskId: null
 };
 
 const $ = (id) => document.getElementById(id);
@@ -134,18 +134,29 @@ function renderProjectDetail() {
   els.projectThumb.src = project.thumbnailUrl || '';
   els.projectThumb.alt = project.name;
   els.photoCount.textContent = detail.photos.length;
-  els.imageCount.textContent = detail.images.length + state.generatingCount;
+  const tasks = detail.tasks || [];
+  els.imageCount.textContent = detail.images.length + tasks.length;
   els.sourcePhotos.innerHTML = detail.photos.map((photo) => `<img src="${photo.url}" alt="">`).join('');
-  const skeletons = Array.from({ length: state.generatingCount }, (_item, index) => `
-    <article class="image-card skeleton-card" aria-label="Generando imagen ${index + 1}">
-      <div class="skeleton-image"></div>
+  const taskCards = tasks.map((task) => {
+    const isGenerating = String(state.generatingTaskId) === String(task.id);
+    return `
+    <article class="image-card task-card ${isGenerating ? 'skeleton-card' : ''}">
+      <div class="${isGenerating ? 'skeleton-image' : 'planned-image'}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>
+      </div>
       <div class="card-body">
-        <strong>Generando...</strong>
-        <span>Imagen ${index + 1}</span>
+        <strong>${escapeHtml(task.title)}</strong>
+        <span>${isGenerating ? 'Generando ahora...' : task.status === 'failed' ? 'Falló, puedes reintentar' : 'Lista para crear'}</span>
+        <span class="image-actions">
+          <button class="primary-button task-generate-button" type="button" data-generate-task="${task.id}" ${isGenerating ? 'disabled' : ''}>
+            ${isGenerating ? 'Creando...' : task.status === 'failed' ? 'Reintentar' : 'Crear imagen'}
+          </button>
+        </span>
       </div>
     </article>
-  `).join('');
-  els.generatedImages.innerHTML = skeletons + detail.images.map((image) => `
+  `;
+  }).join('');
+  els.generatedImages.innerHTML = taskCards + detail.images.map((image) => `
     <article class="image-card" data-open-image="${image.id}">
       <img src="${image.url}" alt="${escapeHtml(image.title)}">
       <div class="card-body">
@@ -321,41 +332,37 @@ async function generateImages() {
   if (!state.currentProjectId) return;
   els.generateButton.disabled = true;
   const requestedCount = Math.max(1, Math.min(12, Number(state.settings.promptCount || els.promptCount?.value || 8)));
-  state.generatingCount = requestedCount;
-  renderProjectDetail();
   els.generateButton.textContent = 'Preparando...';
   try {
-    const plan = await api(`/api/projects/${state.currentProjectId}/generate-plan`, {
+    await api(`/api/projects/${state.currentProjectId}/generate-plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ count: requestedCount })
     });
-    const prompts = plan.prompts || [];
-    state.generatingCount = prompts.length;
-    renderProjectDetail();
-
-    let completed = 0;
-    for (const item of prompts) {
-      els.generateButton.textContent = `Generando ${completed + 1}/${prompts.length}`;
-      await api(`/api/projects/${state.currentProjectId}/generate-one`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(item)
-      });
-      completed += 1;
-      state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
-      state.generatingCount = Math.max(0, prompts.length - completed);
-      renderProjectDetail();
-    }
-    showToast(`${completed} imagen(es) generada(s).`);
     state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
-    state.generatingCount = 0;
     renderProjectDetail();
+    showToast('Lista de imagenes preparada.');
   } finally {
-    state.generatingCount = 0;
     els.generateButton.disabled = false;
     els.generateButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8Z"/></svg>Generar';
     if (state.projectDetail) renderProjectDetail();
+  }
+}
+
+async function generateTask(taskId) {
+  if (!state.currentProjectId) return;
+  state.generatingTaskId = taskId;
+  renderProjectDetail();
+  try {
+    await api(`/api/generation-tasks/${taskId}/generate`, { method: 'POST' });
+    state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+    showToast('Imagen creada.');
+  } finally {
+    state.generatingTaskId = null;
+    if (state.currentProjectId) {
+      state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+      renderProjectDetail();
+    }
   }
 }
 
@@ -424,6 +431,12 @@ els.projectsList.addEventListener('click', (event) => {
 });
 
 els.generatedImages.addEventListener('click', (event) => {
+  const taskButton = event.target.closest('[data-generate-task]');
+  if (taskButton) {
+    event.stopPropagation();
+    generateTask(taskButton.dataset.generateTask).catch((err) => showToast(err.message));
+    return;
+  }
   const deleteButton = event.target.closest('[data-delete-image]');
   if (deleteButton) {
     event.stopPropagation();
