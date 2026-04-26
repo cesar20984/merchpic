@@ -32,7 +32,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-key' 
 const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 1024 * 1024, files: 6 },
+  limits: { fileSize: 50 * 1024 * 1024, files: 6 },
   fileFilter: (_req, file, cb) => {
     cb(null, /^image\/(png|jpe?g|webp)$/i.test(file.mimetype));
   }
@@ -675,7 +675,7 @@ async function createBackgroundImageResponse({ model, photos, prompt, size, qual
 
   const tool = {
     type: 'image_generation',
-    model: 'gpt-image-1',
+    model: normalizeGptImageModel(model),
     size,
     quality,
     output_format: 'jpeg',
@@ -813,7 +813,11 @@ async function createReferencedImage({ model, image, prompt, size, quality, outp
 }
 
 function supportsInputFidelity(model) {
-  return /gpt-image-1(?:\.5|-mini)?$/i.test(model);
+  return /^gpt-image-1$/i.test(model);
+}
+
+function normalizeGptImageModel(model) {
+  return /gpt-image/i.test(model) ? model : 'gpt-image-1';
 }
 
 function mimeExtension(mimeType = '') {

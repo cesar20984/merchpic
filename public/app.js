@@ -274,54 +274,10 @@ async function uploadFiles(files) {
   showToast(`${preparedFiles.length} foto(s) guardada(s).`);
 }
 
-async function prepareUploadFiles(files) {
+function prepareUploadFiles(files) {
   const selected = files.slice(0, 6);
   if (files.length > selected.length) showToast('Se subiran maximo 6 fotos por vez.');
-  const converted = [];
-  for (const file of selected) {
-    converted.push(await compressImage(file));
-  }
-  return converted;
-}
-
-async function compressImage(file) {
-  if (!file.type.startsWith('image/')) return file;
-  const image = await loadImage(file);
-  const maxSide = 1280;
-  const ratio = Math.min(1, maxSide / Math.max(image.width, image.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(image.width * ratio));
-  canvas.height = Math.max(1, Math.round(image.height * ratio));
-  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-
-  for (const quality of [0.84, 0.76, 0.68, 0.6]) {
-    const blob = await canvasToBlob(canvas, quality);
-    if (!blob) return file;
-    if (blob.size <= 700 * 1024 || quality === 0.6) {
-      return new File([blob], file.name.replace(/\.[^.]+$/, '.jpg') || `foto-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    }
-  }
-  return file;
-}
-
-function loadImage(file) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    const url = URL.createObjectURL(file);
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('No se pudo procesar una imagen.'));
-    };
-    image.src = url;
-  });
-}
-
-function canvasToBlob(canvas, quality) {
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+  return selected;
 }
 
 async function startCamera() {
@@ -330,7 +286,7 @@ async function startCamera() {
     return;
   }
   state.stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } },
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
     audio: false
   });
   els.cameraVideo.srcObject = state.stream;
@@ -349,12 +305,10 @@ function stopCamera() {
 async function capturePhoto() {
   const video = els.cameraVideo;
   const canvas = els.captureCanvas;
-  const maxSide = 1280;
-  const ratio = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
-  canvas.width = Math.max(1, Math.round(video.videoWidth * ratio));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * ratio));
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.84));
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.98));
   if (!blob) throw new Error('No se pudo capturar la foto.');
   return new File([blob], `foto-${Date.now()}.jpg`, { type: 'image/jpeg' });
 }
