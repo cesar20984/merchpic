@@ -376,6 +376,24 @@ app.delete('/api/images/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/images/:id/regenerate', async (req, res) => {
+  await ensureDatabase();
+  const [image] = await sql`
+    SELECT project_id, title, prompt
+    FROM generated_images
+    WHERE id = ${req.params.id}
+  `;
+  if (!image) return res.status(404).json({ error: 'Imagen no encontrada.' });
+
+  const [task] = await sql`
+    INSERT INTO generation_tasks (project_id, title, prompt)
+    VALUES (${image.project_id}, ${`Rehacer ${image.title}`}, ${image.prompt})
+    RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, created_at, updated_at
+  `;
+
+  res.status(201).json({ task: taskDto(task) });
+});
+
 app.post('/api/projects/:id/generate', async (req, res) => {
   await ensureDatabase();
   if (!process.env.OPENAI_API_KEY) {
@@ -602,6 +620,34 @@ app.get('/api/cron/poll-tasks', async (req, res) => {
       results.push({ taskId: asNumber(task.id), error: error.message });
     }
   }
+  res.json({ checked: tasks.length, results });
+});
+
+app.post('/api/projects/:id/review-tasks', async (req, res) => {
+  await ensureDatabase();
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
+  }
+
+  const tasks = await sql`
+    SELECT id, project_id, title, prompt, status, openai_response_id, image_model, image_size, image_quality
+    FROM generation_tasks
+    WHERE project_id = ${req.params.id}
+      AND status = 'processing'
+      AND openai_response_id IS NOT NULL
+    ORDER BY updated_at ASC
+    LIMIT 12
+  `;
+
+  const results = [];
+  for (const task of tasks) {
+    try {
+      results.push(await finalizeBackgroundTask(task));
+    } catch (error) {
+      results.push({ taskId: asNumber(task.id), error: error.message });
+    }
+  }
+
   res.json({ checked: tasks.length, results });
 });
 

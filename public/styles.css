@@ -83,6 +83,14 @@ main { padding: 16px; }
   grid-template-columns: 1fr 1fr;
 }
 
+.upload-row {
+  grid-template-columns: 1fr 1fr;
+}
+
+.upload-row .file-button {
+  grid-column: 1 / -1;
+}
+
 input, select, textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -316,6 +324,7 @@ svg {
 }
 
 .danger-button.compact,
+.secondary-button.compact,
 .download-button {
   flex: 1 1 0;
   width: auto;
@@ -431,18 +440,20 @@ video {
 
 .toast {
   position: fixed;
-  left: 16px;
-  right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  left: 50%;
+  top: calc(10px + env(safe-area-inset-top));
   z-index: 10;
-  margin: auto;
-  width: min(480px, calc(100% - 32px));
-  padding: 12px 14px;
+  width: max-content;
+  max-width: min(360px, calc(100% - 32px));
+  padding: 9px 12px;
   border-radius: 8px;
   background: #15211d;
   color: #fff;
+  font-size: 13px;
   font-weight: 750;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  transform: translateX(-50%);
 }
 
 .image-modal {
@@ -495,6 +506,7 @@ video {
 }
 
 .modal-actions .download-button,
+.modal-actions .secondary-button,
 .modal-actions .danger-button {
   flex: 1 1 0;
 }

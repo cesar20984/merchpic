@@ -4,7 +4,9 @@ const state = {
   projectDetail: null,
   settings: {},
   stream: null,
-  generatingTaskId: null
+  generatingTaskId: null,
+  cameraTimer: null,
+  pollTimer: null
 };
 
 const $ = (id) => document.getElementById(id);
@@ -27,6 +29,7 @@ const els = {
   captureButton: $('captureButton'),
   fileInput: $('fileInput'),
   generateButton: $('generateButton'),
+  reviewAllButton: $('reviewAllButton'),
   sourcePhotos: $('sourcePhotos'),
   generatedImages: $('generatedImages'),
   photoCount: $('photoCount'),
@@ -45,6 +48,7 @@ const els = {
   modalImage: $('modalImage'),
   modalDownload: $('modalDownload'),
   modalSaveButton: $('modalSaveButton'),
+  modalRegenerateButton: $('modalRegenerateButton'),
   modalDeleteButton: $('modalDeleteButton'),
   modalCloseButton: $('modalCloseButton'),
   toast: $('toast')
@@ -56,7 +60,7 @@ function showToast(message) {
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => {
     els.toast.hidden = true;
-  }, 3600);
+  }, 2600);
 }
 
 async function api(path, options = {}) {
@@ -73,6 +77,11 @@ function showScreen(name) {
   $(`${name}Screen`).classList.add('active');
   els.backButton.hidden = name === 'projects';
   els.screenTitle.textContent = name === 'projects' ? 'Proyectos' : name === 'settings' ? 'Settings' : 'Producto';
+}
+
+function rememberProject(id) {
+  if (id) localStorage.setItem('merchpic.currentProjectId', String(id));
+  else localStorage.removeItem('merchpic.currentProjectId');
 }
 
 function optionList(select, values, selected) {
@@ -126,6 +135,7 @@ function renderProjects() {
 
 async function openProject(id) {
   state.currentProjectId = id;
+  rememberProject(id);
   state.projectDetail = await api(`/api/projects/${id}`);
   renderProjectDetail();
   showScreen('detail');
@@ -186,6 +196,7 @@ function renderProjectDetail() {
           ${isIOSDevice()
             ? `<button class="download-button" type="button" data-save-image="${image.id}">Guardar</button>`
             : `<a class="download-button" href="${image.downloadUrl}">Descargar</a>`}
+          <button class="secondary-button compact" type="button" data-regenerate-image="${image.id}">Rehacer</button>
           <button class="danger-button compact" type="button" data-delete-image="${image.id}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
             Borrar
@@ -195,6 +206,7 @@ function renderProjectDetail() {
     </article>
   `).join('');
   els.generatedImages.innerHTML = imageCards + taskCards;
+  updateTaskPolling();
 }
 
 function openImageModal(id) {
@@ -207,6 +219,7 @@ function openImageModal(id) {
   els.modalDownload.hidden = isIOSDevice();
   els.modalSaveButton.hidden = !isIOSDevice();
   els.modalSaveButton.dataset.saveImage = image.id;
+  els.modalRegenerateButton.dataset.regenerateImage = image.id;
   els.modalDeleteButton.dataset.deleteImage = image.id;
   els.imageModal.hidden = false;
   document.body.classList.add('modal-open');
@@ -224,6 +237,7 @@ async function deleteProject(id) {
   if (String(state.currentProjectId) === String(id)) {
     state.currentProjectId = null;
     state.projectDetail = null;
+    rememberProject(null);
     stopCamera();
     showScreen('projects');
   }
@@ -238,6 +252,14 @@ async function deleteGeneratedImage(id) {
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
   showToast('Imagen borrada.');
+}
+
+async function regenerateImage(id) {
+  const result = await api(`/api/images/${id}/regenerate`, { method: 'POST' });
+  state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+  renderProjectDetail();
+  closeImageModal();
+  showToast(result.task ? 'Nueva tarea creada.' : 'No se pudo crear la tarea.');
 }
 
 async function saveImageToPhone(id) {
@@ -292,14 +314,30 @@ async function startCamera() {
   els.cameraVideo.srcObject = state.stream;
   els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Cerrar';
   els.captureButton.disabled = false;
+  resetCameraTimer();
 }
 
 function stopCamera() {
+  clearCameraTimer();
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;
   els.cameraVideo.srcObject = null;
   els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L8 6H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-1.5-2Z"/><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg>Cámara';
   els.captureButton.disabled = true;
+}
+
+function resetCameraTimer() {
+  clearCameraTimer();
+  if (!state.stream) return;
+  state.cameraTimer = setTimeout(() => {
+    stopCamera();
+    showToast('Camara apagada por inactividad.');
+  }, 5000);
+}
+
+function clearCameraTimer() {
+  if (state.cameraTimer) clearTimeout(state.cameraTimer);
+  state.cameraTimer = null;
 }
 
 async function capturePhoto() {
@@ -314,8 +352,10 @@ async function capturePhoto() {
 }
 
 async function captureAndUpload() {
+  resetCameraTimer();
   const file = await capturePhoto();
   await uploadFiles([file]);
+  resetCameraTimer();
 }
 
 async function generateImages() {
@@ -354,6 +394,43 @@ async function generateTask(taskId) {
       renderProjectDetail();
     }
   }
+}
+
+async function reviewAllTasks({ silent = false } = {}) {
+  if (!state.currentProjectId) return;
+  const processing = (state.projectDetail?.tasks || []).filter((task) => task.status === 'processing');
+  if (!processing.length) {
+    stopTaskPolling();
+    if (!silent) showToast('No hay imagenes en proceso.');
+    return;
+  }
+  if (!silent) els.reviewAllButton.disabled = true;
+  try {
+    const result = await api(`/api/projects/${state.currentProjectId}/review-tasks`, { method: 'POST' });
+    state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+    renderProjectDetail();
+    const created = (result.results || []).filter((item) => item.generated).length;
+    if (!silent) showToast(created ? `${created} imagen(es) recuperada(s).` : 'OpenAI sigue trabajando.');
+  } finally {
+    els.reviewAllButton.disabled = false;
+  }
+}
+
+function updateTaskPolling() {
+  const hasProcessing = (state.projectDetail?.tasks || []).some((task) => task.status === 'processing');
+  if (!hasProcessing || !state.currentProjectId) {
+    stopTaskPolling();
+    return;
+  }
+  if (state.pollTimer) return;
+  state.pollTimer = setInterval(() => {
+    reviewAllTasks({ silent: true }).catch((err) => showToast(err.message));
+  }, 10000);
+}
+
+function stopTaskPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = null;
 }
 
 async function loadSettings() {
@@ -439,6 +516,12 @@ els.generatedImages.addEventListener('click', (event) => {
     deleteGeneratedImage(deleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
     return;
   }
+  const regenerateButton = event.target.closest('[data-regenerate-image]');
+  if (regenerateButton) {
+    event.stopPropagation();
+    regenerateImage(regenerateButton.dataset.regenerateImage).catch((err) => showToast(err.message));
+    return;
+  }
   if (event.target.closest('a')) return;
   const card = event.target.closest('[data-open-image]');
   if (card) openImageModal(card.dataset.openImage);
@@ -454,6 +537,9 @@ els.modalDeleteButton.addEventListener('click', () => {
 els.modalSaveButton.addEventListener('click', () => {
   saveImageToPhone(els.modalSaveButton.dataset.saveImage).catch((err) => showToast(err.message));
 });
+els.modalRegenerateButton.addEventListener('click', () => {
+  regenerateImage(els.modalRegenerateButton.dataset.regenerateImage).catch((err) => showToast(err.message));
+});
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.imageModal.hidden) closeImageModal();
 });
@@ -463,6 +549,8 @@ els.backButton.addEventListener('click', () => {
     showScreen('detail');
   } else {
     stopCamera();
+    stopTaskPolling();
+    rememberProject(null);
     showScreen('projects');
     loadProjects().catch((err) => showToast(err.message));
   }
@@ -477,6 +565,7 @@ els.cameraButton.addEventListener('click', () => startCamera().catch((err) => sh
 els.captureButton.addEventListener('click', () => captureAndUpload().catch((err) => showToast(err.message)));
 els.fileInput.addEventListener('change', (event) => uploadFiles([...event.target.files]).catch((err) => showToast(err.message)));
 els.generateButton.addEventListener('click', () => generateImages().catch((err) => showToast(err.message)));
+els.reviewAllButton.addEventListener('click', () => reviewAllTasks().catch((err) => showToast(err.message)));
 els.refreshModelsButton.addEventListener('click', () => refreshModels().catch((err) => showToast(err.message)));
 els.saveSettingsButton.addEventListener('click', () => saveSettings().catch((err) => showToast(err.message)));
 
@@ -484,4 +573,14 @@ window.addEventListener('beforeunload', stopCamera);
 
 loadSettings()
   .then(loadProjects)
+  .then(async () => {
+    const savedProjectId = localStorage.getItem('merchpic.currentProjectId');
+    if (!savedProjectId) return;
+    try {
+      await openProject(savedProjectId);
+    } catch (_err) {
+      rememberProject(null);
+      showScreen('projects');
+    }
+  })
   .catch((err) => showToast(err.message));
