@@ -6,6 +6,7 @@ const state = {
   stream: null,
   generatingTaskId: null,
   regenerateDraftId: null,
+  editingImageId: null,
   editImageId: null,
   editImage: null,
   editDrawing: false,
@@ -217,6 +218,21 @@ function renderProjectDetail() {
   const imageCards = detail.images.map((image) => {
     const replacementTask = replacementTasks.get(String(image.id));
     if (replacementTask) return taskCardMarkup(replacementTask);
+
+    if (String(state.editingImageId) === String(image.id)) {
+      return `
+        <article class="image-card task-card skeleton-card">
+          <div class="skeleton-image">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3"/><path d="M18.4 5.6 16.2 7.8"/><path d="M21 12h-3"/><path d="M18.4 18.4 16.2 16.2"/><path d="M12 21v-3"/><path d="M5.6 18.4 7.8 16.2"/><path d="M3 12h3"/><path d="M5.6 5.6 7.8 7.8"/></svg>
+          </div>
+          <div class="card-body">
+            <strong>${escapeHtml(image.title)}</strong>
+            <span>Modificando imagen...</span>
+            <span>OpenAI esta aplicando la mascara pintada</span>
+          </div>
+        </article>
+      `;
+    }
 
     const isDraft = String(state.regenerateDraftId) === String(image.id);
     if (isDraft) {
@@ -498,19 +514,26 @@ async function submitImageModification() {
     showToast('Pinta la zona que quieres modificar.');
     return;
   }
+  const imageId = state.editImageId;
   els.editSubmitButton.disabled = true;
   try {
     const form = new FormData();
     form.append('image', await canvasBlob(els.editImageCanvas), 'imagen-a-modificar.png');
     form.append('mask', await buildEditMaskBlob(), 'mascara.png');
     form.append('instruction', els.editPrompt.value || '');
-    const result = await api(`/api/images/${state.editImageId}/modify`, { method: 'POST', body: form });
-    state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
-    renderProjectDetail();
+    state.editingImageId = imageId;
     closeEditModal();
+    renderProjectDetail();
+    showToast('Modificando imagen...');
+    const result = await api(`/api/images/${imageId}/modify`, { method: 'POST', body: form });
+    state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+    state.editingImageId = null;
+    renderProjectDetail();
     showToast(result.image ? 'Imagen modificada.' : 'No se pudo modificar.');
   } finally {
+    state.editingImageId = null;
     els.editSubmitButton.disabled = false;
+    if (state.projectDetail) renderProjectDetail();
   }
 }
 
