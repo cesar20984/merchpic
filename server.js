@@ -440,6 +440,80 @@ app.post('/api/images/:id/regenerate', async (req, res) => {
   res.status(201).json({ task: taskDto(task) });
 });
 
+app.post('/api/images/:id/modify', upload.fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'mask', maxCount: 1 }
+]), async (req, res) => {
+  await ensureDatabase();
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'Falta OPENAI_API_KEY en variables de entorno.' });
+  }
+
+  const [image] = await sql`
+    SELECT id, project_id, title, prompt
+    FROM generated_images
+    WHERE id = ${req.params.id}
+  `;
+  if (!image) return res.status(404).json({ error: 'Imagen no encontrada.' });
+
+  const editFile = req.files?.image?.[0];
+  const maskFile = req.files?.mask?.[0];
+  if (!editFile || !maskFile) return res.status(400).json({ error: 'Falta la imagen o la mascara.' });
+
+  const settings = await settingsObject();
+  const photos = await referencePhotos(image.project_id);
+  const selectedImageModel = String(req.body?.imageModel || settings.imageModel);
+  const imageModel = /gpt-image/i.test(selectedImageModel) ? selectedImageModel : 'gpt-image-1';
+  const requestedSize = String(req.body?.imageSize || settings.imageSize);
+  const apiSize = normalizeImageSize(imageModel, requestedSize);
+  const quality = String(req.body?.imageQuality || settings.imageQuality || 'medium');
+  const instruction = String(req.body?.instruction || '').trim();
+  const prompt = [
+    exactProductInstruction,
+    'Modifica solamente la zona marcada por la mascara en la primera imagen. Conserva la composicion, perspectiva, producto exacto, materiales, logo, color, textura, escala e iluminacion de la imagen original. Usa las fotos de referencia solo para recuperar detalles fieles del mismo producto.',
+    instruction ? `Cambio solicitado: ${instruction}` : 'Haz una mejora natural y fiel en la zona marcada, sin cambiar las zonas no marcadas.'
+  ].join('\n\n');
+
+  const inputImages = [
+    await toFile(editFile.buffer, 'imagen-original.png', { type: 'image/png' }),
+    ...(await Promise.all(photos.map((photo, index) => {
+      const extension = mimeExtension(photo.mime_type);
+      const name = photo.original_name || `product-reference-${index + 1}.${extension}`;
+      return toFile(Buffer.from(photo.image_base64, 'base64'), name, { type: photo.mime_type });
+    })))
+  ];
+  const mask = await toFile(maskFile.buffer, 'mascara.png', { type: 'image/png' });
+  const { response, mimeType } = await createReferencedImage({
+    model: imageModel,
+    image: inputImages,
+    mask,
+    prompt,
+    size: apiSize,
+    quality,
+    outputFormat: 'jpeg',
+    outputCompression: 90
+  });
+
+  const b64 = response.data?.[0]?.b64_json;
+  if (!b64) throw new Error('OpenAI no devolvio datos de imagen.');
+
+  const [updatedImage] = await sql`
+    UPDATE generated_images
+    SET
+      prompt = ${prompt},
+      size = ${requestedSize},
+      model = ${imageModel},
+      mime_type = ${mimeType},
+      image_data = decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex'),
+      created_at = now()
+    WHERE id = ${image.id}
+    RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
+  `;
+  await sql`UPDATE projects SET updated_at = now() WHERE id = ${image.project_id}`;
+
+  res.json({ image: imageDto(updatedImage) });
+});
+
 app.post('/api/projects/:id/generate', async (req, res) => {
   await ensureDatabase();
   if (!process.env.OPENAI_API_KEY) {
@@ -894,7 +968,7 @@ function extractImageResult(response) {
   return null;
 }
 
-async function createReferencedImage({ model, image, prompt, size, quality, outputFormat, outputCompression }) {
+async function createReferencedImage({ model, image, mask, prompt, size, quality, outputFormat, outputCompression }) {
   const body = {
     model,
     image,
@@ -905,6 +979,7 @@ async function createReferencedImage({ model, image, prompt, size, quality, outp
     output_format: outputFormat,
     output_compression: outputCompression
   };
+  if (mask) body.mask = mask;
 
   if (supportsInputFidelity(model)) {
     body.input_fidelity = 'high';

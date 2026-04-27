@@ -6,6 +6,11 @@ const state = {
   stream: null,
   generatingTaskId: null,
   regenerateDraftId: null,
+  editImageId: null,
+  editImage: null,
+  editDrawing: false,
+  editHasMask: false,
+  editLastPoint: null,
   pollTimer: null
 };
 
@@ -50,8 +55,19 @@ const els = {
   modalDownload: $('modalDownload'),
   modalSaveButton: $('modalSaveButton'),
   modalRegenerateButton: $('modalRegenerateButton'),
+  modalModifyButton: $('modalModifyButton'),
   modalDeleteButton: $('modalDeleteButton'),
   modalCloseButton: $('modalCloseButton'),
+  editModal: $('editModal'),
+  editTitle: $('editTitle'),
+  editStage: $('editStage'),
+  editImageCanvas: $('editImageCanvas'),
+  editMaskCanvas: $('editMaskCanvas'),
+  editPrompt: $('editPrompt'),
+  editBrushSize: $('editBrushSize'),
+  editClearButton: $('editClearButton'),
+  editSubmitButton: $('editSubmitButton'),
+  editCloseButton: $('editCloseButton'),
   toast: $('toast')
 };
 
@@ -229,12 +245,13 @@ function renderProjectDetail() {
       <div class="card-body">
         <strong>${escapeHtml(image.title)}</strong>
         <span>${escapeHtml(image.size)} · ${escapeHtml(image.model)}</span>
-        <span class="image-actions">
-          ${isIOSDevice()
-            ? `<button class="download-button" type="button" data-save-image="${image.id}">Guardar</button>`
-            : `<a class="download-button" href="${image.downloadUrl}">Descargar</a>`}
-          <button class="secondary-button compact" type="button" data-regenerate-image="${image.id}">Rehacer</button>
-          <button class="danger-button compact" type="button" data-delete-image="${image.id}">
+          <span class="image-actions">
+              ${isIOSDevice()
+                ? `<button class="download-button" type="button" data-save-image="${image.id}">Guardar</button>`
+                : `<a class="download-button" href="${image.downloadUrl}">Descargar</a>`}
+              <button class="secondary-button compact" type="button" data-modify-image="${image.id}">Modificar</button>
+              <button class="secondary-button compact" type="button" data-regenerate-image="${image.id}">Rehacer</button>
+              <button class="danger-button compact" type="button" data-delete-image="${image.id}">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
             Borrar
           </button>
@@ -258,8 +275,10 @@ function openImageModal(id) {
   els.modalDownload.hidden = isIOSDevice();
   els.modalSaveButton.hidden = !isIOSDevice();
   els.modalRegenerateButton.hidden = false;
+  els.modalModifyButton.hidden = false;
   els.modalSaveButton.dataset.saveImage = image.id;
   els.modalRegenerateButton.dataset.regenerateImage = image.id;
+  els.modalModifyButton.dataset.modifyImage = image.id;
   els.modalDeleteButton.dataset.deleteImage = image.id;
   delete els.modalDeleteButton.dataset.deletePhoto;
   els.imageModal.hidden = false;
@@ -277,6 +296,7 @@ function openPhotoModal(id) {
   els.modalDownload.hidden = true;
   els.modalSaveButton.hidden = true;
   els.modalRegenerateButton.hidden = true;
+  els.modalModifyButton.hidden = true;
   els.modalDeleteButton.dataset.deletePhoto = photo.id;
   delete els.modalDeleteButton.dataset.deleteImage;
   els.imageModal.hidden = false;
@@ -288,6 +308,8 @@ function closeImageModal() {
   els.modalImage.src = '';
   els.imageModal.dataset.mode = '';
   els.modalRegenerateButton.hidden = false;
+  els.modalModifyButton.hidden = false;
+  delete els.modalModifyButton.dataset.modifyImage;
   delete els.modalDeleteButton.dataset.deletePhoto;
   delete els.modalDeleteButton.dataset.deleteImage;
   document.body.classList.remove('modal-open');
@@ -352,6 +374,144 @@ async function regenerateImage(id, instruction = '') {
   }
   showToast('Rehaciendo en la misma casilla.');
   await generateTask(result.task.id);
+}
+
+function canvasBlob(canvas, type = 'image/png', quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('No se pudo preparar la imagen.'));
+    }, type, quality);
+  });
+}
+
+async function loadDrawableImage(url) {
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  image.decoding = 'async';
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error('No se pudo cargar la imagen para editar.'));
+    image.src = url;
+  });
+  return image;
+}
+
+function clearEditMask() {
+  const ctx = els.editMaskCanvas.getContext('2d');
+  ctx.clearRect(0, 0, els.editMaskCanvas.width, els.editMaskCanvas.height);
+  state.editHasMask = false;
+}
+
+async function buildEditMaskBlob() {
+  const source = els.editMaskCanvas;
+  const sourceData = source.getContext('2d').getImageData(0, 0, source.width, source.height);
+  const mask = document.createElement('canvas');
+  mask.width = source.width;
+  mask.height = source.height;
+  const ctx = mask.getContext('2d');
+  const output = ctx.createImageData(mask.width, mask.height);
+  for (let i = 0; i < output.data.length; i += 4) {
+    const selected = sourceData.data[i + 3] > 0;
+    output.data[i] = 255;
+    output.data[i + 1] = 255;
+    output.data[i + 2] = 255;
+    output.data[i + 3] = selected ? 0 : 255;
+  }
+  ctx.putImageData(output, 0, 0);
+  return canvasBlob(mask);
+}
+
+async function openEditModal(id) {
+  const image = state.projectDetail?.images.find((item) => String(item.id) === String(id));
+  if (!image) return;
+  closeImageModal();
+  state.editImageId = id;
+  state.editImage = image;
+  els.editTitle.textContent = image.title;
+  els.editPrompt.value = '';
+  const loaded = await loadDrawableImage(image.url);
+  const width = loaded.naturalWidth || loaded.width;
+  const height = loaded.naturalHeight || loaded.height;
+  els.editStage.style.aspectRatio = `${width} / ${height}`;
+  for (const canvas of [els.editImageCanvas, els.editMaskCanvas]) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  els.editImageCanvas.getContext('2d').drawImage(loaded, 0, 0, width, height);
+  clearEditMask();
+  els.editModal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeEditModal() {
+  els.editModal.hidden = true;
+  state.editImageId = null;
+  state.editImage = null;
+  state.editDrawing = false;
+  state.editHasMask = false;
+  state.editLastPoint = null;
+  els.editPrompt.value = '';
+  document.body.classList.remove('modal-open');
+}
+
+function editCanvasPoint(event) {
+  const rect = els.editMaskCanvas.getBoundingClientRect();
+  const touch = event.touches?.[0] || event.changedTouches?.[0];
+  const clientX = touch ? touch.clientX : event.clientX;
+  const clientY = touch ? touch.clientY : event.clientY;
+  return {
+    x: ((clientX - rect.left) / rect.width) * els.editMaskCanvas.width,
+    y: ((clientY - rect.top) / rect.height) * els.editMaskCanvas.height
+  };
+}
+
+function paintEditMask(event) {
+  if (!state.editDrawing) return;
+  event.preventDefault();
+  const point = editCanvasPoint(event);
+  const ctx = els.editMaskCanvas.getContext('2d');
+  const brush = Number(els.editBrushSize.value || 42) * (els.editMaskCanvas.width / Math.max(320, els.editMaskCanvas.clientWidth || 320));
+  ctx.save();
+  ctx.lineWidth = brush;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = 'rgba(40, 124, 255, 0.46)';
+  ctx.strokeStyle = 'rgba(40, 124, 255, 0.46)';
+  if (state.editLastPoint) {
+    ctx.beginPath();
+    ctx.moveTo(state.editLastPoint.x, state.editLastPoint.y);
+    ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, brush / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  state.editLastPoint = point;
+  state.editHasMask = true;
+}
+
+async function submitImageModification() {
+  if (!state.editImageId) return;
+  if (!state.editHasMask) {
+    showToast('Pinta la zona que quieres modificar.');
+    return;
+  }
+  els.editSubmitButton.disabled = true;
+  try {
+    const form = new FormData();
+    form.append('image', await canvasBlob(els.editImageCanvas), 'imagen-a-modificar.png');
+    form.append('mask', await buildEditMaskBlob(), 'mascara.png');
+    form.append('instruction', els.editPrompt.value || '');
+    const result = await api(`/api/images/${state.editImageId}/modify`, { method: 'POST', body: form });
+    state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+    renderProjectDetail();
+    closeEditModal();
+    showToast(result.image ? 'Imagen modificada.' : 'No se pudo modificar.');
+  } finally {
+    els.editSubmitButton.disabled = false;
+  }
 }
 
 async function saveImageToPhone(id) {
@@ -607,6 +767,12 @@ els.generatedImages.addEventListener('click', (event) => {
     openRegeneratePanel(regenerateButton.dataset.regenerateImage);
     return;
   }
+  const modifyButton = event.target.closest('[data-modify-image]');
+  if (modifyButton) {
+    event.stopPropagation();
+    openEditModal(modifyButton.dataset.modifyImage).catch((err) => showToast(err.message));
+    return;
+  }
   const cancelRegenerateButton = event.target.closest('[data-cancel-regenerate]');
   if (cancelRegenerateButton) {
     event.stopPropagation();
@@ -645,8 +811,33 @@ els.modalSaveButton.addEventListener('click', () => {
 els.modalRegenerateButton.addEventListener('click', () => {
   openRegeneratePanel(els.modalRegenerateButton.dataset.regenerateImage);
 });
+els.modalModifyButton.addEventListener('click', () => {
+  openEditModal(els.modalModifyButton.dataset.modifyImage).catch((err) => showToast(err.message));
+});
+els.editCloseButton.addEventListener('click', closeEditModal);
+els.editModal.addEventListener('click', (event) => {
+  if (event.target.closest('[data-close-edit]')) closeEditModal();
+});
+els.editClearButton.addEventListener('click', clearEditMask);
+els.editSubmitButton.addEventListener('click', () => submitImageModification().catch((err) => showToast(err.message)));
+els.editMaskCanvas.addEventListener('pointerdown', (event) => {
+  state.editDrawing = true;
+  state.editLastPoint = null;
+  els.editMaskCanvas.setPointerCapture?.(event.pointerId);
+  paintEditMask(event);
+});
+els.editMaskCanvas.addEventListener('pointermove', paintEditMask);
+els.editMaskCanvas.addEventListener('pointerup', () => {
+  state.editDrawing = false;
+  state.editLastPoint = null;
+});
+els.editMaskCanvas.addEventListener('pointercancel', () => {
+  state.editDrawing = false;
+  state.editLastPoint = null;
+});
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.imageModal.hidden) closeImageModal();
+  if (event.key === 'Escape' && !els.editModal.hidden) closeEditModal();
 });
 
 els.backButton.addEventListener('click', () => {

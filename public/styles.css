@@ -295,6 +295,7 @@ svg {
 
 .image-actions {
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .danger-button,
@@ -552,6 +553,44 @@ video {
 .modal-actions .secondary-button,
 .modal-actions .danger-button {
   flex: 1 1 0;
+}
+
+.edit-panel {
+  width: min(100%, 980px);
+}
+
+.edit-stage {
+  position: relative;
+  width: 100%;
+  max-height: min(60vh, 700px);
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #eef3f0;
+  touch-action: none;
+}
+
+.edit-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+#editMaskCanvas {
+  cursor: crosshair;
+}
+
+.edit-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.edit-controls label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .task-card {
