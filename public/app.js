@@ -211,7 +211,7 @@ function renderProjectDetail() {
             <strong>${escapeHtml(image.title)}</strong>
             <span>${escapeHtml(image.size)} Â· ${escapeHtml(image.model)}</span>
             <div class="regenerate-panel">
-              <label for="regenerateNote-${image.id}">Que quieres corregir?</label>
+              <label for="regenerateNote-${image.id}">Correccion opcional</label>
               <textarea id="regenerateNote-${image.id}" data-regenerate-note="${image.id}" rows="3" placeholder="Ej: conserva el mismo producto, pero mejora la iluminacion y corrige el angulo."></textarea>
               <span class="image-actions">
                 <button class="primary-button compact" type="button" data-submit-regenerate="${image.id}">Crear de nuevo</button>
