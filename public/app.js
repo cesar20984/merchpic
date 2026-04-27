@@ -149,7 +149,14 @@ function renderProjectDetail() {
   els.photoCount.textContent = detail.photos.length;
   const tasks = detail.tasks || [];
   els.imageCount.textContent = detail.images.length + tasks.length;
-  els.sourcePhotos.innerHTML = detail.photos.map((photo) => `<img src="${photo.url}" alt="">`).join('');
+  els.sourcePhotos.innerHTML = detail.photos.map((photo, index) => `
+    <article class="source-photo" data-open-photo="${photo.id}">
+      <img src="${photo.url}" alt="Foto de referencia ${index + 1}">
+      <button class="danger-button mini-delete" type="button" data-delete-photo="${photo.id}" title="Borrar foto">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+      </button>
+    </article>
+  `).join('');
   const taskCards = tasks.map((task) => {
     const isGenerating = String(state.generatingTaskId) === String(task.id);
     const isProcessing = task.status === 'processing';
@@ -211,15 +218,35 @@ function renderProjectDetail() {
 function openImageModal(id) {
   const image = state.projectDetail?.images.find((item) => String(item.id) === String(id));
   if (!image) return;
+  els.imageModal.dataset.mode = 'generated';
   els.modalTitle.textContent = image.title;
   els.modalImage.src = image.url;
   els.modalImage.alt = image.title;
   els.modalDownload.href = image.downloadUrl;
   els.modalDownload.hidden = isIOSDevice();
   els.modalSaveButton.hidden = !isIOSDevice();
+  els.modalRegenerateButton.hidden = false;
   els.modalSaveButton.dataset.saveImage = image.id;
   els.modalRegenerateButton.dataset.regenerateImage = image.id;
   els.modalDeleteButton.dataset.deleteImage = image.id;
+  delete els.modalDeleteButton.dataset.deletePhoto;
+  els.imageModal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function openPhotoModal(id) {
+  const photo = state.projectDetail?.photos.find((item) => String(item.id) === String(id));
+  if (!photo) return;
+  els.imageModal.dataset.mode = 'source';
+  els.modalTitle.textContent = photo.original_name || 'Foto de referencia';
+  els.modalImage.src = photo.url;
+  els.modalImage.alt = photo.original_name || 'Foto de referencia';
+  els.modalDownload.href = '#';
+  els.modalDownload.hidden = true;
+  els.modalSaveButton.hidden = true;
+  els.modalRegenerateButton.hidden = true;
+  els.modalDeleteButton.dataset.deletePhoto = photo.id;
+  delete els.modalDeleteButton.dataset.deleteImage;
   els.imageModal.hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -227,6 +254,10 @@ function openImageModal(id) {
 function closeImageModal() {
   els.imageModal.hidden = true;
   els.modalImage.src = '';
+  els.imageModal.dataset.mode = '';
+  els.modalRegenerateButton.hidden = false;
+  delete els.modalDeleteButton.dataset.deletePhoto;
+  delete els.modalDeleteButton.dataset.deleteImage;
   document.body.classList.remove('modal-open');
 }
 
@@ -251,6 +282,16 @@ async function deleteGeneratedImage(id) {
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
   showToast('Imagen borrada.');
+}
+
+async function deleteSourcePhoto(id) {
+  if (!confirm('Borrar esta foto de referencia?')) return;
+  await api(`/api/photos/${id}`, { method: 'DELETE' });
+  closeImageModal();
+  state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
+  renderProjectDetail();
+  await loadProjects();
+  showToast('Foto borrada.');
 }
 
 async function regenerateImage(id) {
@@ -478,6 +519,17 @@ els.projectsList.addEventListener('click', (event) => {
   if (card) openProject(card.dataset.project).catch((err) => showToast(err.message));
 });
 
+els.sourcePhotos.addEventListener('click', (event) => {
+  const deleteButton = event.target.closest('[data-delete-photo]');
+  if (deleteButton) {
+    event.stopPropagation();
+    deleteSourcePhoto(deleteButton.dataset.deletePhoto).catch((err) => showToast(err.message));
+    return;
+  }
+  const photo = event.target.closest('[data-open-photo]');
+  if (photo) openPhotoModal(photo.dataset.openPhoto);
+});
+
 els.generatedImages.addEventListener('click', (event) => {
   const saveButton = event.target.closest('[data-save-image]');
   if (saveButton) {
@@ -513,6 +565,10 @@ els.imageModal.addEventListener('click', (event) => {
   if (event.target.closest('[data-close-modal]')) closeImageModal();
 });
 els.modalDeleteButton.addEventListener('click', () => {
+  if (els.modalDeleteButton.dataset.deletePhoto) {
+    deleteSourcePhoto(els.modalDeleteButton.dataset.deletePhoto).catch((err) => showToast(err.message));
+    return;
+  }
   deleteGeneratedImage(els.modalDeleteButton.dataset.deleteImage).catch((err) => showToast(err.message));
 });
 els.modalSaveButton.addEventListener('click', () => {

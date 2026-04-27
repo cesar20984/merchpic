@@ -338,6 +338,32 @@ app.get('/api/photos/:id', async (req, res) => {
   res.send(Buffer.from(photo.image_base64, 'base64'));
 });
 
+app.delete('/api/photos/:id', async (req, res) => {
+  await ensureDatabase();
+  const [deleted] = await sql`
+    DELETE FROM source_photos
+    WHERE id = ${req.params.id}
+    RETURNING id, project_id
+  `;
+  if (!deleted) return res.status(404).json({ error: 'Foto no encontrada.' });
+
+  const [nextPhoto] = await sql`
+    SELECT id
+    FROM source_photos
+    WHERE project_id = ${deleted.project_id}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  await sql`
+    UPDATE projects
+    SET thumbnail_photo_id = ${nextPhoto?.id || null}, updated_at = now()
+    WHERE id = ${deleted.project_id}
+  `;
+
+  res.json({ ok: true });
+});
+
 app.get('/api/images/:id', async (req, res) => {
   await ensureDatabase();
   const [image] = await sql`
