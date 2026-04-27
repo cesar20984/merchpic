@@ -5,7 +5,6 @@ const state = {
   settings: {},
   stream: null,
   generatingTaskId: null,
-  cameraTimer: null,
   pollTimer: null
 };
 
@@ -314,30 +313,14 @@ async function startCamera() {
   els.cameraVideo.srcObject = state.stream;
   els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>Cerrar';
   els.captureButton.disabled = false;
-  resetCameraTimer();
 }
 
 function stopCamera() {
-  clearCameraTimer();
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;
   els.cameraVideo.srcObject = null;
   els.cameraButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L8 6H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3l-1.5-2Z"/><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/></svg>Cámara';
   els.captureButton.disabled = true;
-}
-
-function resetCameraTimer() {
-  clearCameraTimer();
-  if (!state.stream) return;
-  state.cameraTimer = setTimeout(() => {
-    stopCamera();
-    showToast('Camara apagada por inactividad.');
-  }, 5000);
-}
-
-function clearCameraTimer() {
-  if (state.cameraTimer) clearTimeout(state.cameraTimer);
-  state.cameraTimer = null;
 }
 
 async function capturePhoto() {
@@ -352,10 +335,8 @@ async function capturePhoto() {
 }
 
 async function captureAndUpload() {
-  resetCameraTimer();
   const file = await capturePhoto();
   await uploadFiles([file]);
-  resetCameraTimer();
 }
 
 async function generateImages() {
