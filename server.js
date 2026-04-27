@@ -160,6 +160,7 @@ function photoDto(photo) {
 }
 
 function imageDto(image) {
+  const version = image.created_at ? new Date(image.created_at).getTime() : Date.now();
   return {
     id: asNumber(image.id),
     project_id: asNumber(image.project_id),
@@ -169,7 +170,7 @@ function imageDto(image) {
     model: image.model,
     mime_type: image.mime_type,
     created_at: image.created_at,
-    url: `/api/images/${image.id}`,
+    url: `/api/images/${image.id}?v=${version}`,
     downloadUrl: `/api/images/${image.id}/download`
   };
 }
