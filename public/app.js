@@ -5,10 +5,12 @@ const state = {
   settings: {},
   stream: null,
   generatingTaskId: null,
+  regenerateDraftId: null,
   pollTimer: null
 };
 
 const $ = (id) => document.getElementById(id);
+const cssEscape = (value) => window.CSS?.escape ? CSS.escape(String(value)) : String(value).replaceAll('"', '\\"');
 
 const els = {
   screenTitle: $('screenTitle'),
@@ -148,7 +150,7 @@ function renderProjectDetail() {
   els.projectThumb.alt = project.name;
   els.photoCount.textContent = detail.photos.length;
   const tasks = detail.tasks || [];
-  els.imageCount.textContent = detail.images.length + tasks.length;
+  els.imageCount.textContent = detail.images.length + tasks.filter((task) => !task.replace_image_id).length;
   els.sourcePhotos.innerHTML = detail.photos.map((photo, index) => `
     <article class="source-photo" data-open-photo="${photo.id}">
       <img src="${photo.url}" alt="Foto de referencia ${index + 1}">
@@ -157,7 +159,10 @@ function renderProjectDetail() {
       </button>
     </article>
   `).join('');
-  const taskCards = tasks.map((task) => {
+  const replacementTasks = new Map(tasks
+    .filter((task) => task.replace_image_id)
+    .map((task) => [String(task.replace_image_id), task]));
+  const taskCardMarkup = (task) => {
     const isGenerating = String(state.generatingTaskId) === String(task.id);
     const isProcessing = task.status === 'processing';
     const isActive = isGenerating || isProcessing;
@@ -191,8 +196,34 @@ function renderProjectDetail() {
       </div>
     </article>
   `;
-  }).join('');
-  const imageCards = detail.images.map((image) => `
+  };
+  const taskCards = tasks.filter((task) => !task.replace_image_id).map(taskCardMarkup).join('');
+  const imageCards = detail.images.map((image) => {
+    const replacementTask = replacementTasks.get(String(image.id));
+    if (replacementTask) return taskCardMarkup(replacementTask);
+
+    const isDraft = String(state.regenerateDraftId) === String(image.id);
+    if (isDraft) {
+      return `
+        <article class="image-card" data-open-image="${image.id}">
+          <img src="${image.url}" alt="${escapeHtml(image.title)}">
+          <div class="card-body">
+            <strong>${escapeHtml(image.title)}</strong>
+            <span>${escapeHtml(image.size)} Â· ${escapeHtml(image.model)}</span>
+            <div class="regenerate-panel">
+              <label for="regenerateNote-${image.id}">Que quieres corregir?</label>
+              <textarea id="regenerateNote-${image.id}" data-regenerate-note="${image.id}" rows="3" placeholder="Ej: conserva el mismo producto, pero mejora la iluminacion y corrige el angulo."></textarea>
+              <span class="image-actions">
+                <button class="primary-button compact" type="button" data-submit-regenerate="${image.id}">Crear de nuevo</button>
+                <button class="secondary-button compact" type="button" data-cancel-regenerate="${image.id}">Cancelar</button>
+              </span>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    return `
     <article class="image-card" data-open-image="${image.id}">
       <img src="${image.url}" alt="${escapeHtml(image.title)}">
       <div class="card-body">
@@ -210,7 +241,8 @@ function renderProjectDetail() {
         </span>
       </div>
     </article>
-  `).join('');
+  `;
+  }).join('');
   els.generatedImages.innerHTML = imageCards + taskCards;
   updateTaskPolling();
 }
@@ -294,12 +326,32 @@ async function deleteSourcePhoto(id) {
   showToast('Foto borrada.');
 }
 
-async function regenerateImage(id) {
-  const result = await api(`/api/images/${id}/regenerate`, { method: 'POST' });
+function openRegeneratePanel(id) {
+  state.regenerateDraftId = id;
+  closeImageModal();
+  renderProjectDetail();
+  requestAnimationFrame(() => {
+    const textarea = document.querySelector(`[data-regenerate-note="${cssEscape(id)}"]`);
+    textarea?.focus();
+  });
+}
+
+async function regenerateImage(id, instruction = '') {
+  const result = await api(`/api/images/${id}/regenerate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruction })
+  });
+  state.regenerateDraftId = null;
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
   closeImageModal();
-  showToast(result.task ? 'Nueva tarea creada.' : 'No se pudo crear la tarea.');
+  if (!result.task) {
+    showToast('No se pudo crear la tarea.');
+    return;
+  }
+  showToast('Rehaciendo en la misma casilla.');
+  await generateTask(result.task.id);
 }
 
 async function saveImageToPhone(id) {
@@ -552,10 +604,26 @@ els.generatedImages.addEventListener('click', (event) => {
   const regenerateButton = event.target.closest('[data-regenerate-image]');
   if (regenerateButton) {
     event.stopPropagation();
-    regenerateImage(regenerateButton.dataset.regenerateImage).catch((err) => showToast(err.message));
+    openRegeneratePanel(regenerateButton.dataset.regenerateImage);
+    return;
+  }
+  const cancelRegenerateButton = event.target.closest('[data-cancel-regenerate]');
+  if (cancelRegenerateButton) {
+    event.stopPropagation();
+    state.regenerateDraftId = null;
+    renderProjectDetail();
+    return;
+  }
+  const submitRegenerateButton = event.target.closest('[data-submit-regenerate]');
+  if (submitRegenerateButton) {
+    event.stopPropagation();
+    const id = submitRegenerateButton.dataset.submitRegenerate;
+    const note = document.querySelector(`[data-regenerate-note="${cssEscape(id)}"]`)?.value || '';
+    regenerateImage(id, note).catch((err) => showToast(err.message));
     return;
   }
   if (event.target.closest('a')) return;
+  if (event.target.closest('textarea, input, label')) return;
   const card = event.target.closest('[data-open-image]');
   if (card) openImageModal(card.dataset.openImage);
 });
@@ -575,7 +643,7 @@ els.modalSaveButton.addEventListener('click', () => {
   saveImageToPhone(els.modalSaveButton.dataset.saveImage).catch((err) => showToast(err.message));
 });
 els.modalRegenerateButton.addEventListener('click', () => {
-  regenerateImage(els.modalRegenerateButton.dataset.regenerateImage).catch((err) => showToast(err.message));
+  openRegeneratePanel(els.modalRegenerateButton.dataset.regenerateImage);
 });
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.imageModal.hidden) closeImageModal();

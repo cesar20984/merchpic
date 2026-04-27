@@ -324,6 +324,7 @@ svg {
 }
 
 .danger-button.compact,
+.primary-button.compact,
 .secondary-button.compact,
 .download-button {
   flex: 1 1 0;
@@ -334,6 +335,24 @@ svg {
 .download-button {
   color: var(--accent);
   background: var(--soft);
+}
+
+.regenerate-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.regenerate-panel label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.regenerate-panel textarea {
+  min-height: 88px;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .project-hero {
