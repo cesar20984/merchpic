@@ -171,9 +171,7 @@ function renderProjectDetail() {
   els.sourcePhotos.innerHTML = detail.photos.map((photo, index) => `
     <article class="source-photo" data-open-photo="${photo.id}">
       <img src="${photo.url}" alt="Foto de referencia ${index + 1}">
-      <button class="danger-button mini-delete" type="button" data-delete-photo="${photo.id}" title="Borrar foto">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
-      </button>
+      <button class="mini-delete" type="button" data-delete-photo="${photo.id}" title="Borrar foto" aria-label="Borrar foto">x</button>
     </article>
   `).join('');
   const replacementTasks = new Map(tasks
@@ -432,7 +430,7 @@ async function buildEditMaskBlob() {
     output.data[i] = 255;
     output.data[i + 1] = 255;
     output.data[i + 2] = 255;
-    output.data[i + 3] = selected ? 0 : 255;
+    output.data[i + 3] = selected ? 255 : 0;
   }
   ctx.putImageData(output, 0, 0);
   return canvasBlob(mask);
@@ -563,17 +561,20 @@ async function saveImageToPhone(id) {
 async function uploadFiles(files) {
   if (!state.currentProjectId || !files.length) return;
   const preparedFiles = await prepareUploadFiles(files);
-  const form = new FormData();
-  for (const file of preparedFiles) form.append('photos', file);
-  await api(`/api/projects/${state.currentProjectId}/photos`, { method: 'POST', body: form });
+  for (const [index, file] of preparedFiles.entries()) {
+    const form = new FormData();
+    form.append('photos', file);
+    showToast(`Subiendo foto ${index + 1} de ${preparedFiles.length}...`);
+    await api(`/api/projects/${state.currentProjectId}/photos`, { method: 'POST', body: form });
+  }
   state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
   renderProjectDetail();
   showToast(`${preparedFiles.length} foto(s) guardada(s).`);
 }
 
 function prepareUploadFiles(files) {
-  const selected = files.slice(0, 6);
-  if (files.length > selected.length) showToast('Se subiran maximo 6 fotos por vez.');
+  const selected = files.slice(0, 12);
+  if (files.length > selected.length) showToast('Se subiran maximo 12 fotos por vez.');
   return selected;
 }
 

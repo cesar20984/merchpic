@@ -443,19 +443,23 @@ video {
 
 .mini-delete {
   position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 34px;
-  height: 34px;
-  min-height: 34px;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
-  border-radius: 8px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
-}
-
-.mini-delete svg {
-  width: 17px;
-  height: 17px;
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: rgba(185, 28, 28, 0.92);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.24);
+  cursor: pointer;
 }
 
 .image-card a {

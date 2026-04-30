@@ -32,7 +32,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-key' 
 const app = express();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024, files: 6 },
+  limits: { fileSize: 50 * 1024 * 1024, files: 12 },
   fileFilter: (_req, file, cb) => {
     cb(null, /^image\/(png|jpe?g|webp)$/i.test(file.mimetype));
   }
@@ -470,7 +470,7 @@ app.post('/api/images/:id/modify', upload.fields([
   const instruction = String(req.body?.instruction || '').trim();
   const prompt = [
     exactProductInstruction,
-    'Modifica solamente la zona marcada por la mascara en la primera imagen. Conserva la composicion, perspectiva, producto exacto, materiales, logo, color, textura, escala e iluminacion de la imagen original. Usa las fotos de referencia solo para recuperar detalles fieles del mismo producto.',
+    'Modifica solamente la zona blanca/opaca marcada por la mascara en la primera imagen. La zona marcada debe cambiar de forma visible segun la instruccion; no devuelvas una copia identica. Conserva la composicion, perspectiva, producto exacto, materiales, logo, color, textura, escala e iluminacion de la imagen original. Usa las fotos de referencia solo para recuperar detalles fieles del mismo producto.',
     instruction ? `Cambio solicitado: ${instruction}` : 'Haz una mejora natural y fiel en la zona marcada, sin cambiar las zonas no marcadas.'
   ].join('\n\n');
 
