@@ -474,44 +474,44 @@ app.post('/api/images/:id/modify', upload.fields([
     instruction ? `Cambio solicitado: ${instruction}` : 'Haz una mejora natural y fiel en la zona marcada, sin cambiar las zonas no marcadas.'
   ].join('\n\n');
 
-  const inputImages = [
-    await toFile(editFile.buffer, 'imagen-original.png', { type: 'image/png' }),
-    ...(await Promise.all(photos.map((photo, index) => {
-      const extension = mimeExtension(photo.mime_type);
-      const name = photo.original_name || `product-reference-${index + 1}.${extension}`;
-      return toFile(Buffer.from(photo.image_base64, 'base64'), name, { type: photo.mime_type });
-    })))
-  ];
-  const mask = await toFile(maskFile.buffer, 'mascara.png', { type: 'image/png' });
-  const { response, mimeType } = await createReferencedImage({
+  const [processingTask] = await sql`
+    SELECT id
+    FROM generation_tasks
+    WHERE replace_image_id = ${image.id}
+      AND status = 'processing'
+    LIMIT 1
+  `;
+  if (processingTask) return res.status(409).json({ error: 'Esta imagen ya se esta modificando.' });
+  await sql`
+    DELETE FROM generation_tasks
+    WHERE replace_image_id = ${image.id}
+      AND status <> 'processing'
+  `;
+
+  const response = await createBackgroundMaskedEditResponse({
     model: imageModel,
-    image: inputImages,
-    mask,
+    imageBuffer: editFile.buffer,
+    maskBuffer: maskFile.buffer,
+    photos,
     prompt,
     size: apiSize,
-    quality,
-    outputFormat: 'jpeg',
-    outputCompression: 90
+    quality
   });
 
-  const b64 = response.data?.[0]?.b64_json;
-  if (!b64) throw new Error('OpenAI no devolvio datos de imagen.');
-
-  const [updatedImage] = await sql`
-    UPDATE generated_images
-    SET
-      prompt = ${prompt},
-      size = ${requestedSize},
-      model = ${imageModel},
-      mime_type = ${mimeType},
-      image_data = decode(${Buffer.from(b64, 'base64').toString('hex')}, 'hex'),
-      created_at = now()
-    WHERE id = ${image.id}
-    RETURNING id, project_id, title, prompt, size, model, mime_type, created_at
+  const [task] = await sql`
+    INSERT INTO generation_tasks (
+      project_id, title, prompt, status, openai_response_id, response_status,
+      image_model, image_size, image_quality, replace_image_id
+    )
+    VALUES (
+      ${image.project_id}, ${image.title}, ${prompt}, ${'processing'}, ${response.id}, ${response.status || 'queued'},
+      ${imageModel}, ${requestedSize}, ${quality}, ${image.id}
+    )
+    RETURNING id, project_id, title, prompt, status, error, openai_response_id, response_status, image_model, image_size, image_quality, replace_image_id, created_at, updated_at
   `;
   await sql`UPDATE projects SET updated_at = now() WHERE id = ${image.project_id}`;
 
-  res.json({ image: imageDto(updatedImage) });
+  res.status(202).json({ task: taskDto(task) });
 });
 
 app.post('/api/projects/:id/generate', async (req, res) => {
@@ -862,6 +862,64 @@ async function createBackgroundImageResponse({ model, photos, prompt, size, qual
   };
 
   const optionalParams = ['input_fidelity', 'output_compression', 'output_format'];
+  while (true) {
+    try {
+      return await client.responses.create(body);
+    } catch (error) {
+      const message = String(error.message || '');
+      const rejectedParam = optionalParams.find((param) => message.includes(`'${param}'`) || message.includes(param));
+      if (!rejectedParam || !Object.prototype.hasOwnProperty.call(tool, rejectedParam)) throw error;
+      delete tool[rejectedParam];
+    }
+  }
+}
+
+async function createVisionFile(buffer, name, type) {
+  const file = await toFile(buffer, name, { type });
+  const result = await client.files.create({
+    file,
+    purpose: 'vision'
+  });
+  return result.id;
+}
+
+async function createBackgroundMaskedEditResponse({ model, imageBuffer, maskBuffer, photos, prompt, size, quality }) {
+  const originalFileId = await createVisionFile(imageBuffer, 'imagen-original.png', 'image/png');
+  const maskFileId = await createVisionFile(maskBuffer, 'mascara.png', 'image/png');
+  const content = [
+    { type: 'input_text', text: prompt },
+    { type: 'input_image', file_id: originalFileId },
+    ...photos.map((photo) => ({
+      type: 'input_image',
+      image_url: `data:${photo.mime_type || 'image/jpeg'};base64,${photo.image_base64}`
+    }))
+  ];
+
+  const tool = {
+    type: 'image_generation',
+    model: normalizeGptImageModel(model),
+    action: 'edit',
+    size,
+    quality,
+    input_image_mask: { file_id: maskFileId },
+    output_format: 'jpeg',
+    output_compression: 90
+  };
+
+  if (supportsInputFidelity(model)) {
+    tool.input_fidelity = 'high';
+  }
+
+  const body = {
+    model: responseModelForImageWork(),
+    background: true,
+    store: true,
+    input: [{ role: 'user', content }],
+    tools: [tool],
+    tool_choice: { type: 'image_generation' }
+  };
+
+  const optionalParams = ['action', 'input_fidelity', 'output_compression', 'output_format'];
   while (true) {
     try {
       return await client.responses.create(body);

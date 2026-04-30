@@ -527,7 +527,7 @@ async function submitImageModification() {
     state.projectDetail = await api(`/api/projects/${state.currentProjectId}`);
     state.editingImageId = null;
     renderProjectDetail();
-    showToast(result.image ? 'Imagen modificada.' : 'No se pudo modificar.');
+    showToast(result.task ? 'Modificacion en proceso.' : 'No se pudo modificar.');
   } finally {
     state.editingImageId = null;
     els.editSubmitButton.disabled = false;
